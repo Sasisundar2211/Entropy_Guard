@@ -1,0 +1,8 @@
+{
+  "name": "EntropyGuard",
+  "description": "High-stakes industrial compliance agent using computer vision and audio feedback.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
