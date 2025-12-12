@@ -1,1849 +1,1001 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Webcam from 'react-webcam';
-import * as faceapi from 'face-api.js';
-import ReactPlayer from 'react-player';
 import { 
-    Camera, AlertTriangle, Upload, CheckCircle, Settings, ShieldAlert, 
-    Cpu, Zap, Image as ImageIcon, FileText, Ghost, Activity, 
-    Download, Power, ChevronDown, ChevronUp, Crosshair, Move, 
-    RotateCw, RotateCcw, RefreshCcw, Mic, EyeOff, Eye, ListChecks, 
-    CheckSquare, Square, Check, FlipHorizontal, Search, Hammer, Globe, X,
-    Languages, ScanEye, ZoomIn, Target, MessageSquare, Sparkles, AlertCircle,
-    Hand, GripHorizontal, Microscope, ClipboardList, Video, Leaf,
-    FileText as FileDoc, Table, FileOutput, HelpCircle, Youtube, Link as LinkIcon,
-    Play, Pause, FastForward, SkipBack, Layers, FileJson, BrainCircuit, Scan, Siren,
-    Database, Network, Share2, Wand2, ChevronRight, Save, FileDown, Library
+  Network, Activity, ClipboardList, FileText, Table, Download, 
+  ChevronDown, ChevronUp, MessageSquare, Microscope, CheckCircle, XCircle,
+  AlertTriangle, Settings, Scan, Camera, BrainCircuit, Youtube, X, Wand2, Play, Pause,
+  Zap, Layers, Cpu, Eye, Move, RotateCw, Maximize, Lock, Shield, Thermometer, Gauge, HardHat, Mic
 } from 'lucide-react';
-import { analyzeCompliance, generateSchematic, digitizeSOP, performPreFlightCheck, detectLanguageFromAudio, performEnvironmentalTranslation, verifyToolState, generateSOPFromFrames, estimateWasteImpact, processYoutubeVideo } from './services/geminiService';
 import { SettingsModal } from './components/SettingsModal';
 import { TutorialOverlay, TutorialStep } from './components/TutorialOverlay';
-import { ComplianceResponse, ComplianceStatus, DriftSeverity, AuditLogEntry, SOPStep, PrivacyMode, Language, TranslationOverlay, HazardZone, ToolVerificationLogEntry, MasterSOPStep } from './types';
+import { analyzeCompliance, detectLanguageFromAudio, processYoutubeVideo, checkPPE, generateIncidentReport, parseARVoiceCommand } from './services/geminiService';
+import { 
+  ComplianceResponse, DriftSeverity, ComplianceStatus, 
+  PrivacyMode, Language, AuditLogEntry, ToolVerificationLogEntry, PPEResponse, ARVoiceCommand
+} from './types';
 
-// Add global definition for handTrack
-declare global {
-  interface Window {
-    handTrack: any;
-  }
-}
+// Declare global handTrack from the CDN script
+declare const handTrack: any;
 
-const TUTORIAL_STEPS: TutorialStep[] = [
-    {
-        title: "Hybrid Edge-Cloud Architecture",
-        content: "EntropyGuard employs a Dual-Inference Pipeline. We combine Edge DL (Fast) for safety with Cloud GenAI (Slow) for reasoning.",
-        targetId: undefined, // Center
-        position: 'center'
-    },
-    {
-        title: "Edge Perception Layer",
-        content: "This video feed runs a Convolutional Neural Network (CNN) locally at 30 FPS to track hands and enforce spatial geofencing (Hazard Zones).",
-        targetId: "video-feed",
-        position: "center"
-    },
-    {
-        title: "Neural SOP Engine",
-        content: "Import YouTube tutorials to generate interactive safety protocols with 'Ghost Mode' overlays.",
-        targetId: "sop-engine-tab",
-        position: "right"
-    }
-];
-
-// Defined Hazard Zone (0-1000 scale) - e.g., High Voltage area in bottom right
-const STATIC_HAZARD_ZONE: HazardZone = {
-    label: "HIGH VOLTAGE CAPACITOR",
-    boundingBox: [600, 600, 950, 950] // ymin, xmin, ymax, xmax
+// Helper to extract YouTube ID for raw embed
+const getYouTubeID = (url: string) => {
+    if (!url) return null;
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : null;
 };
 
 const App: React.FC = () => {
-  // ------------------------------------------------------------------------
-  // State
-  // ------------------------------------------------------------------------
-  const [apiKey, setApiKey] = useState("");
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [protocolText, setProtocolText] = useState("Protocol 73-A: Ensure Component B is aligned vertically. \nNo loose wires visible. \nClearance check required.");
-  const [referenceData, setReferenceData] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'DOCS' | 'SOP_ENGINE'>('SOP_ENGINE');
-  
-  // V2.0 State
-  const [ghostOpacity, setGhostOpacity] = useState(0);
-  const [isArmed, setIsArmed] = useState(false);
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
-  const [isLogsOpen, setIsLogsOpen] = useState(true);
-
-  // V2.1 AR Calibration State
-  const [isCalibrating, setIsCalibrating] = useState(false);
-  const [ghostPos, setGhostPos] = useState({ x: 0, y: 0 });
-  const [ghostRotation, setGhostRotation] = useState(0);
-
-  // V3.0 Enterprise State (Voice, Privacy, SOP)
-  const [isListening, setIsListening] = useState(false);
-  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
-  const [privacyEngine, setPrivacyEngine] = useState<PrivacyMode>(PrivacyMode.SIMULATION);
-  const [isModelLoaded, setIsModelLoaded] = useState(false);
-  const [sopSteps, setSopSteps] = useState<SOPStep[]>([]);
-  const [isDigitizing, setIsDigitizing] = useState(false);
-  const [isFrozen, setIsFrozen] = useState(false);
-  const [isMirrored, setIsMirrored] = useState(false);
-
-  // V3.5 Global Ops (Language, PreFlight)
-  const [language, setLanguage] = useState<Language>('auto');
-  const [preFlightStatus, setPreFlightStatus] = useState<'IDLE' | 'ANALYZING' | 'PASS' | 'FAIL'>('IDLE');
-  const [missingItems, setMissingItems] = useState<string[]>([]);
-  const [subtitle, setSubtitle] = useState<string | null>(null);
-
-  // V4.0 Universal Tongue & Magic Lens
-  const [isDetectingLang, setIsDetectingLang] = useState(false);
-  const [isTranslatingEnv, setIsTranslatingEnv] = useState(false);
-  const [envTranslations, setEnvTranslations] = useState<TranslationOverlay[]>([]);
-  const [userTranscript, setUserTranscript] = useState<string | null>(null);
-
-  // V5.0 Instrument Verifier & Geofencing
-  const [isMacroMode, setIsMacroMode] = useState(false);
-  const [hazards, setHazards] = useState<HazardZone[]>([STATIC_HAZARD_ZONE]);
-  const [toolCheckStatus, setToolCheckStatus] = useState<'IDLE' | 'MATCH' | 'MISMATCH'>('IDLE');
-  const [toolHistory, setToolHistory] = useState<ToolVerificationLogEntry[]>([]);
+  const [isLogsOpen, setIsLogsOpen] = useState(false);
   const [telemetryView, setTelemetryView] = useState<'DRIFT' | 'TOOL'>('DRIFT');
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [toolHistory, setToolHistory] = useState<ToolVerificationLogEntry[]>([]);
+  
+  // PPE & Safety State
+  const [isShiftActive, setIsShiftActive] = useState(false);
+  const [isScanningPPE, setIsScanningPPE] = useState(false);
+  const [ppeResult, setPpeResult] = useState<PPEResponse | null>(null);
 
-  // V6.0 Gesture Control (Edge Layer)
-  const [isGestureEnabled, setIsGestureEnabled] = useState(false);
-  const [gestureModelLoaded, setGestureModelLoaded] = useState(false);
-  const [edgeSafetyViolation, setEdgeSafetyViolation] = useState(false);
-
-  // V7.0 Master Mode & Green Score
-  const [isMasterMode, setIsMasterMode] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [masterSopSteps, setMasterSopSteps] = useState<MasterSOPStep[]>([]);
-  const [greenScore, setGreenScore] = useState(0); // Grams saved
-  const [isProcessingVideo, setIsProcessingVideo] = useState(false);
-
-  // V8.0 Tutorial & New Reference Features
-  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
+  // Neural SOP State
+  const [isSopOpen, setIsSopOpen] = useState(false);
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [activeYoutubeUrl, setActiveYoutubeUrl] = useState<string | null>(null);
-  const [isImportingYt, setIsImportingYt] = useState(false);
-  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+  const [isProcessingYt, setIsProcessingYt] = useState(false);
+  const [sopSteps, setSopSteps] = useState<any[]>([]);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [isStepWaiting, setIsStepWaiting] = useState(false);
+  const [currentThumbnail, setCurrentThumbnail] = useState<string | null>(null);
   
-  // V9.0 Supervisor Mode (Play-Along)
-  const [isSupervisorMode, setIsSupervisorMode] = useState(false);
-  const [currentVideoStepIndex, setCurrentVideoStepIndex] = useState(0);
-  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
-  const [showGoldenFrame, setShowGoldenFrame] = useState(false);
+  // Ghost Mode AR State
+  const [isGhostMode, setIsGhostMode] = useState(false);
+  const [ghostPos, setGhostPos] = useState({ x: 0, y: 0 });
+  const [ghostRotate, setGhostRotate] = useState(0);
+  const [ghostScale, setGhostScale] = useState(1);
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [voiceFeedback, setVoiceFeedback] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
-  // V10.0 RAG & Neural Telemetry
-  const [vectorIndexStatus, setVectorIndexStatus] = useState<'IDLE' | 'CHUNKING' | 'EMBEDDING' | 'READY'>('IDLE');
-  const [edgeLatency, setEdgeLatency] = useState(0);
-  const [cloudLatency, setCloudLatency] = useState(0);
-  const [edgeFPS, setEdgeFPS] = useState(0);
+  const playerRef = useRef<any>(null);
 
-  // Error & Notification State
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [infoMsg, setInfoMsg] = useState<string | null>(null);
-
-  // Analysis State
+  const [apiKey, setApiKey] = useState(process.env.API_KEY || "");
+  const [privacyMode, setPrivacyMode] = useState<PrivacyMode>(PrivacyMode.SIMULATION);
+  const [language, setLanguage] = useState<Language>('auto');
+  const [isDetectingLang, setIsDetectingLang] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isTutorialOpen, setIsTutorialOpen] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isGeneratingSchematic, setIsGeneratingSchematic] = useState(false);
-  const [result, setResult] = useState<ComplianceResponse | null>(null);
+  const [lastResult, setLastResult] = useState<ComplianceResponse | null>(null);
 
-  // Refs
+  // Edge AI / Computer Vision State
   const webcamRef = useRef<Webcam>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const analyzingRef = useRef(false); 
-  const recognitionRef = useRef<any>(null); // For SpeechRecognition
-  const lastProcessedTimeRef = useRef(0);
-  const lastTranslationTimeRef = useRef(0);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const gestureModelRef = useRef<any>(null);
-  const lastGestureTimeRef = useRef<number>(0);
-  const recordedFramesRef = useRef<string[]>([]);
-  const playerRef = useRef<any>(null);
-  const edgeLoopRef = useRef<number>(0);
-  const lastFrameTimeRef = useRef<number>(0);
+  const [handModel, setHandModel] = useState<any>(null);
+  const [edgeStatus, setEdgeStatus] = useState<string>("INITIALIZING EDGE LAYER...");
+  const [isHazardDetected, setIsHazardDetected] = useState(false);
+  const [fps, setFps] = useState(0);
 
-  // State Refs for Voice Logic
-  const sopStepsRef = useRef(sopSteps);
-  const ghostOpacityRef = useRef(ghostOpacity);
-  const isArmedRef = useRef(isArmed);
-  const hazardsRef = useRef(hazards);
-
-  useEffect(() => { analyzingRef.current = isAnalyzing; }, [isAnalyzing]);
-  useEffect(() => { sopStepsRef.current = sopSteps; }, [sopSteps]);
-  useEffect(() => { ghostOpacityRef.current = ghostOpacity; }, [ghostOpacity]);
-  useEffect(() => { isArmedRef.current = isArmed; }, [isArmed]);
-  useEffect(() => { hazardsRef.current = hazards; }, [hazards]);
-
-  // Load API Key & Check Tutorial
+  // Load YouTube Iframe API
   useEffect(() => {
-    const storedKey = localStorage.getItem('gemini_api_key');
-    if (storedKey) setApiKey(storedKey);
-
-    const hasSeenTutorial = localStorage.getItem('entropy_tutorial_completed');
-    if (!hasSeenTutorial) {
-        setIsTutorialOpen(true);
+    if (!(window as any).YT) {
+      const tag = document.createElement('script');
+      tag.src = "https://www.youtube.com/iframe_api";
+      const firstScriptTag = document.getElementsByTagName('script')[0];
+      firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
     }
   }, []);
 
-  const handleTutorialClose = () => {
-      setIsTutorialOpen(false);
-      localStorage.setItem('entropy_tutorial_completed', 'true');
-  };
-
-  const startTutorial = () => {
-      setIsTutorialOpen(true);
-      // Ensure key drawers are open for tour
-      setIsLogsOpen(true);
-  };
-
-  const handleSetApiKey = (key: string) => {
-    setApiKey(key);
-    localStorage.setItem('gemini_api_key', key);
-  };
-
-  // ------------------------------------------------------------------------
-  // Helper: Error UI & Speech Synthesis
-  // ------------------------------------------------------------------------
-  const showError = useCallback((msg: string) => {
-    setErrorMsg(msg);
-    if ('vibrate' in navigator) navigator.vibrate([50, 100, 50]);
-    setTimeout(() => setErrorMsg(null), 6000);
-  }, []);
-
-  const showInfo = useCallback((msg: string) => {
-      setInfoMsg(msg);
-      setTimeout(() => setInfoMsg(null), 5000);
-  }, []);
-
-  const speak = useCallback((text: string) => {
-    setSubtitle(text);
-    setTimeout(() => setSubtitle(null), 6000);
-
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      const voices = window.speechSynthesis.getVoices();
-      
-      let targetLang = 'en-US';
-      if (language === 'es') targetLang = 'es-ES';
-      if (language === 'de') targetLang = 'de-DE';
-      if (language === 'hi') targetLang = 'hi-IN';
-      if (language === 'zh') targetLang = 'zh-CN';
-      if (language === 'fr') targetLang = 'fr-FR';
-      if (language === 'ja') targetLang = 'ja-JP';
-      
-      const matchedVoice = voices.find(v => v.lang.startsWith(language === 'auto' ? 'en' : language));
-      if (matchedVoice) utterance.voice = matchedVoice;
-      
-      utterance.rate = 1.1;
-      utterance.pitch = 0.9;
-      window.speechSynthesis.speak(utterance);
-    }
-  }, [language]);
-
-  const getLangName = (code: string) => {
-    switch (code) {
-        case 'es': return 'Spanish';
-        case 'de': return 'German';
-        case 'hi': return 'Hindi';
-        case 'zh': return 'Chinese';
-        case 'fr': return 'French';
-        case 'ja': return 'Japanese';
-        case 'en': return 'English';
-        default: return code.toUpperCase();
-    }
-  };
-
-  // Initialize Face API
+  // Load HandTrack Model (Edge AI)
   useEffect(() => {
-    const loadModels = async () => {
-        try {
-            await faceapi.nets.tinyFaceDetector.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models');
-            setIsModelLoaded(true);
-        } catch (error) {
-            console.error("Failed to load FaceAPI models:", error);
-            showError("Failed to load AI vision models.");
-        }
-    };
-    loadModels();
-  }, [showError]);
-
-  // Reset tool check status when entering macro mode
-  useEffect(() => {
-      if (isMacroMode) {
-          setToolCheckStatus('IDLE');
-          showInfo("Macro Scan Active. Align instrument in reticle.");
-          setTelemetryView('TOOL');
-      }
-  }, [isMacroMode, showInfo]);
-
-  // Master Mode Recording Loop
-  useEffect(() => {
-      let interval: ReturnType<typeof setInterval>;
-      if (isRecording) {
-          recordedFramesRef.current = [];
-          speak("Recording initiated. Perform procedure slowly.");
-          interval = setInterval(() => {
-              if (webcamRef.current) {
-                  const frame = webcamRef.current.getScreenshot();
-                  if (frame) recordedFramesRef.current.push(frame);
-              }
-          }, 2000); // Capture every 2 seconds
-      } else if (recordedFramesRef.current.length > 0) {
-          // Recording just stopped
-          speak("Processing recording. Generating protocol.");
-          setIsProcessingVideo(true);
-          generateSOPFromFrames(apiKey, recordedFramesRef.current).then(steps => {
-              setMasterSopSteps(steps);
-              setSopSteps(steps);
-              setIsProcessingVideo(false);
-              speak("Protocol generated from expert session.");
-              // Switch to master mode view to show results if not already
-              if (!isMasterMode) setIsMasterMode(true);
-          });
-      }
-      return () => clearInterval(interval);
-  }, [isRecording, apiKey, isMasterMode, speak]);
-
-  // Supervisor Mode Video Sync Logic (Smart Pause)
-  const handleVideoProgress = ({ playedSeconds }: { playedSeconds: number }) => {
-    if (!isSupervisorMode || !activeYoutubeUrl || sopSteps.length === 0 || showGoldenFrame) return;
-
-    const currentStep = sopSteps[currentVideoStepIndex];
-    if (currentStep && currentStep.timestamp) {
-        // Smart Pause: Stop at step timestamp and show Ghost Overlay
-        if (playedSeconds >= currentStep.timestamp && !currentStep.completed) {
-            setIsVideoPlaying(false);
-            if (playerRef.current) {
-                // Ensure we are paused exactly at the frame
-                playerRef.current.seekTo(currentStep.timestamp, 'seconds');
-            }
-            setShowGoldenFrame(true);
-            speak(`Step target reached. Match the overlay.`);
-        }
-    }
-  };
-  
-  // Resume Logic
-  const handleStepComplete = (stepId: number) => {
-      const stepIndex = sopSteps.findIndex(s => s.id === stepId);
-      if (stepIndex === -1) return;
-
-      const newSteps = [...sopSteps];
-      newSteps[stepIndex].completed = true;
-      setSopSteps(newSteps);
-      
-      // If currently showing golden frame for this step, advance
-      if (stepIndex === currentVideoStepIndex && showGoldenFrame) {
-          setShowGoldenFrame(false);
-          if (stepIndex < sopSteps.length - 1) {
-              setCurrentVideoStepIndex(stepIndex + 1);
-              setIsVideoPlaying(true); // Resume playback to next step
-          } else {
-              speak("Protocol complete.");
-              setIsSupervisorMode(false);
-          }
-      }
-  };
-
-  // When enabling Supervisor mode, reset and play
-  useEffect(() => {
-      if (isSupervisorMode && activeYoutubeUrl && sopSteps.length > 0 && playerRef.current) {
-           if (!isVideoPlaying && !showGoldenFrame && !sopSteps[currentVideoStepIndex].completed) {
-               setIsVideoPlaying(true);
-           }
-      }
-  }, [isSupervisorMode, activeYoutubeUrl, sopSteps, currentVideoStepIndex, showGoldenFrame]);
-
-
-  // ------------------------------------------------------------------------
-  // Core Visual Logic
-  // ------------------------------------------------------------------------
-  
-  const applyPrivacyFilter = useCallback(async (base64Data: string): Promise<string> => {
-      if (!isPrivacyMode) return base64Data;
-      return new Promise((resolve) => {
-          const img = new Image();
-          img.crossOrigin = "anonymous";
-          img.onload = async () => {
-              const canvas = document.createElement('canvas');
-              canvas.width = img.width;
-              canvas.height = img.height;
-              const ctx = canvas.getContext('2d');
-              if (!ctx) { resolve(base64Data); return; }
-              ctx.drawImage(img, 0, 0);
-              if (privacyEngine === PrivacyMode.SIMULATION) {
-                  const faceW = img.width * 0.3; const faceH = img.height * 0.4;
-                  const faceX = (img.width - faceW) / 2; const faceY = img.height * 0.1;
-                  ctx.fillStyle = "rgba(20, 20, 20, 0.9)";
-                  ctx.filter = "blur(15px)";
-                  ctx.fillRect(faceX, faceY, faceW, faceH);
-                  resolve(canvas.toDataURL('image/jpeg'));
-              } else if (privacyEngine === PrivacyMode.REAL_AI && isModelLoaded) {
-                  try {
-                      const detections = await faceapi.detectAllFaces(img, new faceapi.TinyFaceDetectorOptions());
-                      detections.forEach(det => {
-                          const { x, y, width, height } = det.box;
-                          ctx.fillStyle = "rgba(20, 20, 20, 0.95)";
-                          ctx.filter = "blur(10px)";
-                          ctx.fillRect(x, y, width, height);
-                      });
-                      resolve(canvas.toDataURL('image/jpeg'));
-                  } catch (e) { resolve(base64Data); }
-              } else { resolve(base64Data); }
-          };
-          img.src = base64Data;
-      });
-  }, [isPrivacyMode, privacyEngine, isModelLoaded]);
-
-  const drawOverlay = useCallback((coords: number[], status: ComplianceStatus, translations: TranslationOverlay[] = [], hands: any[] = []) => {
-    const canvas = canvasRef.current;
-    const video = webcamRef.current?.video;
-    
-    // Skip standard drawing in Macro Mode to focus on Reticle
-    if (isMacroMode && !edgeSafetyViolation) return;
-
-    if (canvas && video) {
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        const scaleX = canvas.width / 1000;
-        const scaleY = canvas.height / 1000;
-
-        // --- EDGE LAYER: Draw Hazard Zones (Geofencing) ---
-        hazards.forEach(hazard => {
-            const [ymin, xmin, ymax, xmax] = hazard.boundingBox;
-            let x = xmin * scaleX;
-            let y = ymin * scaleY;
-            let w = (xmax - xmin) * scaleX;
-            let h = (ymax - ymin) * scaleY;
-            
-            if (isMirrored) x = canvas.width - (x + w);
-
-            // Draw Hazard Box (Dashed Red)
-            ctx.strokeStyle = "rgba(239, 68, 68, 0.8)";
-            ctx.lineWidth = 3;
-            ctx.setLineDash([10, 5]);
-            ctx.strokeRect(x, y, w, h);
-            ctx.setLineDash([]);
-            
-            // Label
-            ctx.fillStyle = "rgba(239, 68, 68, 0.8)";
-            ctx.fillRect(x, y - 24, ctx.measureText(hazard.label).width + 20, 24);
-            ctx.fillStyle = "white";
-            ctx.font = "bold 12px monospace";
-            ctx.fillText(hazard.label, x + 10, y - 8);
-        });
-
-        // --- EDGE LAYER: Draw Hands ---
-        hands.forEach(hand => {
-             // handtrack.js returns [x, y, w, h] relative to video
-             const [bx, by, bw, bh] = hand.bbox;
-             let hx = bx;
-             if (isMirrored) hx = canvas.width - (bx + bw);
-             
-             ctx.strokeStyle = edgeSafetyViolation ? "#ef4444" : "#22d3ee"; // Red if violation, Cyan if safe
-             ctx.lineWidth = 2;
-             ctx.strokeRect(hx, by, bw, bh);
-             
-             // Draw keypoint connectors logic simulated
-             if (!edgeSafetyViolation) {
-                 ctx.fillStyle = "#22d3ee";
-                 ctx.beginPath();
-                 ctx.arc(hx + bw/2, by + bh/2, 4, 0, 2*Math.PI);
-                 ctx.fill();
-             }
-        });
-
-
-        // --- COGNITIVE LAYER: Translations (Magic Lens) ---
-        if (translations.length > 0) {
-            ctx.font = 'bold 16px "Inter", sans-serif';
-            translations.forEach(t => {
-                let [ymin, xmin, ymax, xmax] = t.boundingBox;
-                if (ymin <= 1) { ymin *= 1000; xmin *= 1000; ymax *= 1000; xmax *= 1000; }
-                let x = xmin * scaleX, w = (xmax - xmin) * scaleX, y = ymin * scaleY, h = (ymax - ymin) * scaleY;
-                if (isMirrored) x = canvas.width - (x + w);
-
-                // Google Lens Style Overlay for text
-                ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-                const textWidth = ctx.measureText(t.text).width + 20;
-                
-                // Draw pill
-                ctx.beginPath();
-                if (ctx.roundRect) ctx.roundRect(x, y, textWidth, 30, 15);
-                else ctx.rect(x, y, textWidth, 30);
-                ctx.fill();
-
-                ctx.fillStyle = "#0f172a";
-                ctx.fillText(t.text, x + 10, y + 20);
-            });
-        }
-
-        // --- COGNITIVE LAYER: Compliance Box (Google Lens Style) ---
-        if (coords.length === 4) {
-            let [x, y, w, h] = coords;
-            if (isMirrored) x = 1000 - (x + w);
-            
-            // Box
-            ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-            ctx.lineWidth = 3;
-            ctx.setLineDash([]); // Solid line
-            
-            // Draw Rounded Rectangle for Bounding Box
-            ctx.beginPath();
-            if (ctx.roundRect) {
-                 ctx.roundRect(x * scaleX, y * scaleY, w * scaleX, h * scaleY, 24);
-            } else {
-                 ctx.rect(x * scaleX, y * scaleY, w * scaleX, h * scaleY);
-            }
-            ctx.stroke();
-
-            // Floating Pill Label
-            const isMatch = status === ComplianceStatus.MATCH;
-            const pillColor = isMatch ? "#4ade80" : "#f87171"; // Tailwind Green-400 or Red-400
-            const labelText = isMatch ? "MATCH" : "DRIFT";
-            
-            ctx.font = 'bold 14px "Inter", sans-serif';
-            const textMetrics = ctx.measureText(labelText);
-            const pillW = textMetrics.width + 40;
-            const pillH = 36;
-            const pillX = (x * scaleX) + (w * scaleX) / 2 - pillW / 2;
-            const pillY = (y * scaleY) - 50; // Float above
-
-            // Connection Line
-            ctx.beginPath();
-            ctx.moveTo((x * scaleX) + (w * scaleX) / 2, (y * scaleY));
-            ctx.lineTo((x * scaleX) + (w * scaleX) / 2, pillY + pillH);
-            ctx.strokeStyle = "rgba(255,255,255,0.6)";
-            ctx.lineWidth = 2;
-            ctx.stroke();
-
-            // Draw Pill Shadow
-            ctx.shadowColor = "rgba(0,0,0,0.5)";
-            ctx.shadowBlur = 10;
-            ctx.shadowOffsetX = 0;
-            ctx.shadowOffsetY = 4;
-
-            // Draw Pill
-            ctx.beginPath();
-            if (ctx.roundRect) ctx.roundRect(pillX, pillY, pillW, pillH, 999);
-            else ctx.rect(pillX, pillY, pillW, pillH);
-            ctx.fillStyle = "#1e293b"; // Dark Slate
-            ctx.fill();
-            
-            // Reset Shadow for text
-            ctx.shadowColor = "transparent";
-            
-            // Stroke Pill
-            ctx.strokeStyle = pillColor;
-            ctx.lineWidth = 2;
-            ctx.stroke();
-
-            // Pill Text
-            ctx.fillStyle = pillColor;
-            ctx.textAlign = "center";
-            ctx.fillText(labelText, pillX + pillW/2, pillY + 23);
-        }
-      }
-    }
-  }, [hazards, isMacroMode, isMirrored, edgeSafetyViolation]);
-
-  const handlePreFlightScan = async () => {
-      if (!webcamRef.current || !referenceData) return;
-      setPreFlightStatus('ANALYZING');
-      const frame = webcamRef.current.getScreenshot();
-      if (!frame) return;
-      try {
-          const result = await performPreFlightCheck(apiKey, frame, referenceData);
-          setHazards(prev => [...prev, ...(result.hazards || [])]);
-          if (result.status === 'PASS') {
-              setPreFlightStatus('PASS');
-              speak(language === 'en' ? "Inventory verified. Edge Hazards identified. System ready." : "Inventory verified.");
-              setMissingItems([]);
-          } else {
-              setPreFlightStatus('FAIL');
-              setMissingItems(result.missing_items);
-              speak("Pre-flight check failed.");
-          }
-      } catch (e) {
-          console.error(e);
-          setPreFlightStatus('FAIL');
-          showError("Pre-flight scan failed.");
-      }
-  };
-
-  const handleToolVerification = useCallback(async () => {
-      if (!webcamRef.current) return;
-      speak("Verifying instrument state.");
-      setToolCheckStatus('IDLE');
-      setIsAnalyzing(true);
-      const frame = webcamRef.current.getScreenshot();
-      if (!frame) return;
-      try {
-          const res = await verifyToolState(apiKey, frame, protocolText);
-          
-          // Log the result
-          const newEntry: ToolVerificationLogEntry = {
-              id: crypto.randomUUID(),
-              timestamp: new Date().toLocaleTimeString(),
-              status: res.status,
-              instruction: res.instruction
-          };
-          setToolHistory(prev => [newEntry, ...prev]);
-
-          if (res.status === 'MATCH') {
-              setToolCheckStatus('MATCH');
-              speak("Instrument verified.");
-          } else {
-              setToolCheckStatus('MISMATCH');
-              speak(`Correction needed: ${res.instruction}`);
-              setSubtitle(`ACTION: ${res.instruction}`);
-          }
-      } catch (e) {
-          console.error(e);
-          showError("Tool verification failed.");
-      }
-      setIsAnalyzing(false);
-  }, [apiKey, protocolText, speak, showError]);
-
-  const runComplianceCheck = useCallback(async (silentMode = false) => {
-    if (!webcamRef.current || analyzingRef.current || isFrozen) return;
-    const now = Date.now();
-    // Enforce Slow Path latency (~2000ms+)
-    if (now - lastProcessedTimeRef.current < 2000) return; 
-    
-    lastProcessedTimeRef.current = now;
-    setIsAnalyzing(true);
-    let imageSrc = webcamRef.current.getScreenshot();
-    
-    if (imageSrc) {
-      const startTime = Date.now();
-      try {
-        imageSrc = await applyPrivacyFilter(imageSrc);
-        
-        // Use current step text if in supervisor mode
-        const currentProtocol = (isSupervisorMode && activeYoutubeUrl && sopStepsRef.current.length > 0) 
-            ? `VERIFY STEP COMPLETION: ${sopStepsRef.current[currentVideoStepIndex].text}`
-            : protocolText;
-
-        const promises: any[] = [analyzeCompliance(apiKey, imageSrc, referenceData, currentProtocol, language, hazardsRef.current)];
-        if (isTranslatingEnv && language !== 'auto') promises.push(performEnvironmentalTranslation(apiKey, imageSrc, language));
-        
-        const [complianceRes, translationRes] = await Promise.all(promises);
-        
-        // Update Cloud Latency Metric
-        setCloudLatency(Date.now() - startTime);
-
-        setResult(complianceRes);
-        if (translationRes && translationRes.length > 0) {
-            setEnvTranslations(translationRes);
-            const now = Date.now();
-            if (now - lastTranslationTimeRef.current > 10000) {
-                lastTranslationTimeRef.current = now;
-                showInfo(`Environment translated to ${getLangName(language)}.`);
-            }
-        }
-        
-        const isMatch = complianceRes.status === ComplianceStatus.MATCH;
-
-        if (complianceRes.status === ComplianceStatus.DRIFT) {
-            if (complianceRes.drift_severity === DriftSeverity.CRITICAL && navigator.vibrate) navigator.vibrate([200, 100, 200]);
-            
-            // Sustainability: Calculate saved waste
-            if (complianceRes.drift_severity === DriftSeverity.CRITICAL) {
-                estimateWasteImpact(apiKey, protocolText).then(grams => {
-                    setGreenScore(prev => prev + grams);
-                });
-            }
-
-            const newEntry: AuditLogEntry = {
-                id: crypto.randomUUID(),
-                timestamp: new Date().toLocaleTimeString(),
-                severity: complianceRes.drift_severity,
-                reasoning: complianceRes.correction_voice
-            };
-            setAuditLogs(prev => [newEntry, ...prev]);
-            speak(complianceRes.correction_voice);
-        } else {
-             if (!silentMode) speak(complianceRes.correction_voice);
-        }
-
-      } catch (e) {
-        console.error("Analysis failed", e);
-        showError("Connection lost.");
-      }
-    }
-    setIsAnalyzing(false);
-  }, [apiKey, referenceData, protocolText, isPrivacyMode, isFrozen, applyPrivacyFilter, isMirrored, language, speak, isTranslatingEnv, showError, showInfo, isSupervisorMode, currentVideoStepIndex, activeYoutubeUrl, showGoldenFrame]);
-
-  // ------------------------------------------------------------------------
-  // Audio & Voice Logic
-  // ------------------------------------------------------------------------
-  const detectLanguage = async () => {
-      setIsDetectingLang(true);
-      speak("Listening for language fingerprint.");
-      try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          const mediaRecorder = new MediaRecorder(stream);
-          mediaRecorderRef.current = mediaRecorder;
-          const chunks: Blob[] = [];
-          mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
-          mediaRecorder.onstop = async () => {
-              const blob = new Blob(chunks, { type: 'audio/webm' });
-              const reader = new FileReader();
-              reader.onloadend = async () => {
-                  const base64Audio = reader.result as string;
-                  const res = await detectLanguageFromAudio(apiKey, base64Audio);
-                  setLanguage(res.code);
-                  setIsDetectingLang(false);
-                  speak(`Language detected: ${res.name}. Switching interface.`);
-              };
-              reader.readAsDataURL(blob);
-              stream.getTracks().forEach(track => track.stop());
-          };
-          mediaRecorder.start();
-          setTimeout(() => mediaRecorder.stop(), 3500); 
-      } catch (e) {
-          console.error("Audio detection failed", e);
-          setIsDetectingLang(false);
-          speak("Audio detection failed.");
-          showError("Could not identify language. Check microphone permissions.");
-      }
-  };
-
-  useEffect(() => {
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (!SpeechRecognition) return;
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = language === 'auto' ? 'en-US' : (language === 'es' ? 'es-ES' : (language === 'de' ? 'de-DE' : (language === 'hi' ? 'hi-IN' : (language === 'zh' ? 'zh-CN' : (language === 'fr' ? 'fr-FR' : (language === 'ja' ? 'ja-JP' : 'en-US'))))));
-      recognition.onstart = () => setIsListening(true);
-      recognition.onend = () => setIsListening(false);
-      recognition.onresult = (event: any) => {
-          let interim = '';
-          let final = '';
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            if (event.results[i].isFinal) final += event.results[i][0].transcript;
-            else interim += event.results[i][0].transcript;
-          }
-          if (final || interim) setUserTranscript(final || interim);
-          if (final) {
-              const transcript = final.trim().toLowerCase();
-              if (transcript.includes("system check") || transcript.includes("compliance check")) {
-                  speak("Initiating check.");
-                  runComplianceCheck();
-              } else if (transcript.includes("freeze")) {
-                  setIsFrozen(prev => !prev);
-                  speak(isFrozen ? "Resuming." : "Frozen.");
-              } else if (transcript.includes("translate")) {
-                  setIsTranslatingEnv(prev => !prev);
-                  speak("Toggling magic lens.");
-              } else if (transcript.includes("enhance") || transcript.includes("macro") || transcript.includes("zoom")) {
-                  setIsMacroMode(prev => !prev);
-                  speak("Switching optic mode.");
-              } else if (transcript.includes("system focus tool") || transcript.includes("focus tool") || transcript.includes("verify tool")) {
-                  if (!isMacroMode) setIsMacroMode(true);
-                  speak("Engaging Instrument Verifier.");
-                  handleToolVerification();
-              }
-              setTimeout(() => setUserTranscript(null), 4000);
-          }
-      };
-      recognitionRef.current = recognition;
-      try { recognition.start(); } catch (e) { console.log("Voice start error", e); }
-      return () => recognition.stop();
-  }, [isFrozen, language, speak, runComplianceCheck, showError, showInfo, handleToolVerification, isMacroMode]);
-
-
-  // ------------------------------------------------------------------------
-  // Hand Gesture & Edge Safety Logic (The "Fast Path")
-  // ------------------------------------------------------------------------
-  useEffect(() => {
-    // Load HandTrack.js
-    if (!gestureModelLoaded && window.handTrack) {
+    if (typeof handTrack !== 'undefined') {
+        setEdgeStatus("LOADING NEURAL NETS...");
         const modelParams = {
-            flipHorizontal: false, 
-            maxNumBoxes: 2,
-            iouThreshold: 0.5,
-            scoreThreshold: 0.7,
+            flipHorizontal: true, 
+            maxNumBoxes: 3, 
+            iouThreshold: 0.5, 
+            scoreThreshold: 0.7, 
         };
-        window.handTrack.load(modelParams).then((model: any) => {
-            gestureModelRef.current = model;
-            setGestureModelLoaded(true);
-            showInfo("Edge Perception Layer Online. Hand Tracking Active.");
+        
+        handTrack.load(modelParams).then((model: any) => {
+            setHandModel(model);
+            setEdgeStatus("EDGE LAYER ACTIVE");
+        }).catch((err: any) => {
+            console.error("Failed to load Edge Model", err);
+            setEdgeStatus("EDGE LAYER FAILED");
         });
     }
-  }, [gestureModelLoaded, showInfo]);
+  }, []);
 
+  // Edge AI Detection Loop (60 FPS Goal) & IoT Overlay
   useEffect(() => {
-    // Edge Loop: Runs rapidly (up to 30FPS) to detect hands and check geofence
-    if (!gestureModelRef.current) return;
-    
-    const runEdgeLoop = async () => {
-        const now = Date.now();
-        const delta = now - lastFrameTimeRef.current;
+    if (!handModel || !webcamRef.current?.video || !canvasRef.current) return;
+
+    let animationId: number;
+    let lastTime = performance.now();
+    let frameCount = 0;
+    let lastFpsTime = performance.now();
+
+    const runDetection = async () => {
+        const video = webcamRef.current?.video;
+        const canvas = canvasRef.current;
         
-        if (webcamRef.current && webcamRef.current.video && webcamRef.current.video.readyState === 4) {
-             const video = webcamRef.current.video;
-             
-             // Measure Edge Latency
-             const edgeStart = Date.now();
-             const predictions = await gestureModelRef.current.detect(video);
-             const edgeEnd = Date.now();
-             setEdgeLatency(edgeEnd - edgeStart);
-             setEdgeFPS(Math.round(1000 / delta));
-             lastFrameTimeRef.current = now;
-             
-             // --- FAST PATH: Safety Geofence Check ---
-             let violation = false;
-             if (predictions.length > 0) {
-                 // Check each hand against hazard zones
-                 predictions.forEach((hand: any) => {
-                     // hand.bbox = [x, y, width, height] relative to video size
-                     const [hx, hy, hw, hh] = hand.bbox;
-                     
-                     // Convert to 1000 scale for comparison with hazards
-                     // Assume video is roughly standard aspect, normalize
-                     const scaleX = 1000 / video.videoWidth;
-                     const scaleY = 1000 / video.videoHeight;
-                     
-                     const hMinX = hx * scaleX;
-                     const hMinY = hy * scaleY;
-                     const hMaxX = (hx + hw) * scaleX;
-                     const hMaxY = (hy + hh) * scaleY;
+        if (video && video.readyState === 4 && canvas) {
+            // Match canvas to video dimensions
+            if (canvas.width !== video.videoWidth) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+            }
 
-                     hazardsRef.current.forEach(hazard => {
-                         const [zMinY, zMinX, zMaxY, zMaxX] = hazard.boundingBox;
-                         // AABB Intersection check
-                         if (hMinX < zMaxX && hMaxX > zMinX && hMinY < zMaxY && hMaxY > zMinY) {
-                             violation = true;
-                         }
-                     });
-                 });
-             }
+            // Detect Hand
+            // Only run heavier detection if Shift is Active to save resources during lock screen
+            // But for PPE check, we might want it. Let's keep it running but only draw HUD if active.
+            let predictions = [];
+            if (isShiftActive || !isShiftActive) { // Always run to keep model warm
+                 predictions = await handModel.detect(video);
+            }
+            
+            // Draw HUD
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.save();
+                
+                // --- DIGITAL TWIN IOT OVERLAY ---
+                // Simulating sensor fusion data
+                if (isShiftActive) {
+                    const time = Date.now();
+                    const temp = 48.5 + Math.sin(time / 2000) * 2 + (Math.random() * 0.5);
+                    const volt = 220.0 + Math.cos(time / 1500) * 1.5 + (Math.random() * 0.5);
+                    const rpm = 1500 + Math.sin(time / 500) * 50;
+                    
+                    // Draw Floating Telemetry Box
+                    const telemX = 20;
+                    const telemY = 80;
+                    const telemW = 160;
+                    const telemH = 90;
+                    
+                    // Tech Box BG
+                    ctx.fillStyle = 'rgba(2, 6, 23, 0.7)';
+                    ctx.fillRect(telemX, telemY, telemW, telemH);
+                    ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)'; // Cyan dim
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(telemX, telemY, telemW, telemH);
 
-             if (violation && !edgeSafetyViolation) {
-                 if (navigator.vibrate) navigator.vibrate(200);
-                 // Only speak occasionally to avoid spamming
-                 if (Date.now() - lastProcessedTimeRef.current > 3000) {
-                     speak("SAFETY VIOLATION. HAND IN HAZARD ZONE.");
-                     lastProcessedTimeRef.current = Date.now();
-                 }
-             }
-             setEdgeSafetyViolation(violation);
+                    // Header
+                    ctx.fillStyle = '#94a3b8'; // Slate 400
+                    ctx.font = '10px "JetBrains Mono"';
+                    ctx.fillText('IOT SENSOR FUSION', telemX + 10, telemY + 15);
 
-             // Render Edge overlays immediately (don't wait for React state)
-             // We pass current Gemini result coordinates if available
-             const geminiCoords = result?.coordinates || [];
-             const geminiStatus = result?.status || ComplianceStatus.MATCH;
-             const geminiTrans = envTranslations || [];
-             drawOverlay(geminiCoords, geminiStatus, geminiTrans, predictions);
+                    // Data Points
+                    ctx.font = 'bold 12px "JetBrains Mono"';
+                    
+                    // Temp
+                    ctx.fillStyle = temp > 50 ? '#f87171' : '#22d3ee';
+                    ctx.fillText(`TEMP: ${temp.toFixed(1)}°C`, telemX + 10, telemY + 35);
+                    
+                    // Volt
+                    ctx.fillStyle = '#a78bfa';
+                    ctx.fillText(`VOLT: ${volt.toFixed(1)}V`, telemX + 10, telemY + 55);
+
+                    // RPM
+                    ctx.fillStyle = '#34d399';
+                    ctx.fillText(`RPM : ${rpm.toFixed(0)}`, telemX + 10, telemY + 75);
+                    
+                    // Connection Status
+                    ctx.fillStyle = '#22c55e';
+                    ctx.beginPath();
+                    ctx.arc(telemX + telemW - 15, telemY + 12, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // --- HAZARD ZONES ---
+                const hazardZone = {
+                    x: canvas.width * 0.6,
+                    y: canvas.height * 0.1,
+                    w: canvas.width * 0.35,
+                    h: canvas.height * 0.4
+                };
+
+                let collision = false;
+                predictions.forEach((pred: any) => {
+                    const [x, y, w, h] = pred.bbox;
+                    if (x < hazardZone.x + hazardZone.w &&
+                        x + w > hazardZone.x &&
+                        y < hazardZone.y + hazardZone.h &&
+                        y + h > hazardZone.y) {
+                        collision = true;
+                    }
+                });
+                setIsHazardDetected(collision);
+
+                // Render Hazard Zone
+                if (isShiftActive) {
+                    ctx.beginPath();
+                    ctx.lineWidth = 3;
+                    ctx.strokeStyle = collision ? '#ef4444' : 'rgba(239, 68, 68, 0.4)';
+                    ctx.setLineDash([10, 5]);
+                    ctx.rect(hazardZone.x, hazardZone.y, hazardZone.w, hazardZone.h);
+                    ctx.stroke();
+                    
+                    ctx.fillStyle = collision ? '#ef4444' : 'rgba(239, 68, 68, 0.6)';
+                    ctx.font = 'bold 14px "JetBrains Mono"';
+                    ctx.fillText('⚡ HIGH VOLTAGE', hazardZone.x, hazardZone.y - 10);
+                    ctx.setLineDash([]);
+                }
+
+                // --- HAND TRACKING ---
+                predictions.forEach((pred: any) => {
+                    const [x, y, w, h] = pred.bbox;
+                    ctx.beginPath();
+                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = collision ? '#ef4444' : '#06b6d4';
+                    ctx.rect(x, y, w, h);
+                    ctx.stroke();
+
+                    ctx.fillStyle = collision ? '#ef4444' : '#06b6d4';
+                    ctx.font = '10px "JetBrains Mono"';
+                    ctx.fillText(`${(pred.score * 100).toFixed(0)}%`, x, y - 5);
+                });
+
+                // Critical Alert
+                if (collision && isShiftActive) {
+                    ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    
+                    ctx.fillStyle = '#ef4444';
+                    ctx.font = 'bold 32px "Inter"';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('⚠ CRITICAL HAZARD ⚠', canvas.width / 2, canvas.height / 2);
+                    ctx.textAlign = 'start';
+                }
+
+                ctx.restore();
+            }
+
+            // FPS Counter
+            frameCount++;
+            const now = performance.now();
+            if (now - lastFpsTime >= 1000) {
+                setFps(Math.round((frameCount * 1000) / (now - lastFpsTime)));
+                frameCount = 0;
+                lastFpsTime = now;
+            }
         }
-        edgeLoopRef.current = requestAnimationFrame(runEdgeLoop);
+        animationId = requestAnimationFrame(runDetection);
     };
 
-    // Start loop if armed or gestures enabled
-    if (isArmed || isGestureEnabled) {
-        edgeLoopRef.current = requestAnimationFrame(runEdgeLoop);
-    } else {
-        cancelAnimationFrame(edgeLoopRef.current);
-        // Clear canvas if stopped
-        const ctx = canvasRef.current?.getContext('2d');
-        if (ctx && canvasRef.current) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    }
+    runDetection();
+    return () => cancelAnimationFrame(animationId);
+  }, [handModel, isShiftActive]);
 
-    return () => cancelAnimationFrame(edgeLoopRef.current);
-  }, [isArmed, isGestureEnabled, isMirrored, edgeSafetyViolation, result, envTranslations, drawOverlay, speak]);
-
-  // Slow Path Loop (Gemini)
+  // AR Calibration Logic
   useEffect(() => {
-      let intervalId: ReturnType<typeof setInterval>;
-      if (isArmed && !isFrozen && !isMacroMode) {
-          runComplianceCheck(true);
-          intervalId = setInterval(() => { runComplianceCheck(true); }, 4000); 
-      }
-      return () => { if (intervalId) clearInterval(intervalId); };
-  }, [isArmed, isFrozen, runComplianceCheck, isMacroMode]);
-
-  // Keyboard
-  useEffect(() => {
+    if (!isGhostMode) return;
+    
     const handleKeyDown = (e: KeyboardEvent) => {
-        if (!isCalibrating) return;
-        if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName || '')) return;
-        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) e.preventDefault();
-        const MOVE_STEP = e.shiftKey ? 10 : 1;
-        const ROT_STEP = e.shiftKey ? 5 : 0.5;
-        switch (e.key) {
-            case 'ArrowUp': setGhostPos(p => ({ ...p, y: p.y - MOVE_STEP })); break;
-            case 'ArrowDown': setGhostPos(p => ({ ...p, y: p.y + MOVE_STEP })); break;
-            case 'ArrowLeft': setGhostPos(p => ({ ...p, x: p.x - MOVE_STEP })); break;
-            case 'ArrowRight': setGhostPos(p => ({ ...p, x: p.x + MOVE_STEP })); break;
-            case ']': setGhostRotation(r => r + ROT_STEP); break;
-            case '[': setGhostRotation(r => r - ROT_STEP); break;
-            case 'r': case 'R': setGhostPos({ x: 0, y: 0 }); setGhostRotation(0); break;
+        const SHIFT_MULTIPLIER = e.shiftKey ? 10 : 1;
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+            e.preventDefault();
+        }
+        switch(e.key) {
+            case 'ArrowUp': setGhostPos(p => ({ ...p, y: p.y - 5 * SHIFT_MULTIPLIER })); break;
+            case 'ArrowDown': setGhostPos(p => ({ ...p, y: p.y + 5 * SHIFT_MULTIPLIER })); break;
+            case 'ArrowLeft': setGhostPos(p => ({ ...p, x: p.x - 5 * SHIFT_MULTIPLIER })); break;
+            case 'ArrowRight': setGhostPos(p => ({ ...p, x: p.x + 5 * SHIFT_MULTIPLIER })); break;
+            case '[': setGhostRotate(r => r - 1 * SHIFT_MULTIPLIER); break;
+            case ']': setGhostRotate(r => r + 1 * SHIFT_MULTIPLIER); break;
+            case '-': case '_': setGhostScale(s => Math.max(0.1, s - 0.01 * SHIFT_MULTIPLIER)); break;
+            case '=': case '+': setGhostScale(s => s + 0.01 * SHIFT_MULTIPLIER); break;
+            case '0': setGhostPos({x:0, y:0}); setGhostRotate(0); setGhostScale(1); break;
         }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCalibrating]);
+  }, [isGhostMode]);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      
-      // Simulate RAG Indexing Process
-      setVectorIndexStatus('CHUNKING');
-      showInfo("Chunking Document...");
-      
-      reader.onloadend = () => {
-        setTimeout(() => {
-             setVectorIndexStatus('EMBEDDING');
-             showInfo("Generating Vector Embeddings...");
-             setTimeout(() => {
-                 setReferenceData(reader.result as string);
-                 setGhostPos({ x: 0, y: 0 });
-                 setSopSteps([]);
-                 setPreFlightStatus('IDLE');
-                 setHazards([STATIC_HAZARD_ZONE]);
-                 setIsArmed(false);
-                 setActiveYoutubeUrl(null);
-                 setVectorIndexStatus('READY');
-                 showInfo("RAG Index Ready. Reference Standard Vectorized.");
-                 speak("Manual indexed in Vector Database.");
-             }, 1500);
-        }, 1000);
-      };
-      reader.readAsDataURL(file);
+  const toggleVoiceRecording = async () => {
+    if (isRecordingVoice) {
+      // STOP RECORDING
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+        setIsRecordingVoice(false);
+        setVoiceFeedback("Processing...");
+      }
+    } else {
+      // START RECORDING
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mediaRecorder = new MediaRecorder(stream);
+        mediaRecorderRef.current = mediaRecorder;
+        audioChunksRef.current = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          const reader = new FileReader();
+          reader.readAsDataURL(audioBlob);
+          reader.onloadend = async () => {
+            const base64Audio = reader.result as string;
+            // Send to Gemini
+            const cmd: ARVoiceCommand = await parseARVoiceCommand(apiKey, base64Audio);
+            setVoiceFeedback(`Command: ${cmd}`);
+            
+            // Execute Command
+            const SHIFT_MULTIPLIER = 10;
+            switch(cmd) {
+                case 'MOVE_LEFT': setGhostPos(p => ({ ...p, x: p.x - 50 })); break;
+                case 'MOVE_RIGHT': setGhostPos(p => ({ ...p, x: p.x + 50 })); break;
+                case 'MOVE_UP': setGhostPos(p => ({ ...p, y: p.y - 50 })); break;
+                case 'MOVE_DOWN': setGhostPos(p => ({ ...p, y: p.y + 50 })); break;
+                case 'ROTATE_CW': setGhostRotate(r => r + 15); break;
+                case 'ROTATE_CCW': setGhostRotate(r => r - 15); break;
+                case 'SCALE_UP': setGhostScale(s => s + 0.1); break;
+                case 'SCALE_DOWN': setGhostScale(s => Math.max(0.1, s - 0.1)); break;
+                case 'RESET': setGhostPos({x:0, y:0}); setGhostRotate(0); setGhostScale(1); break;
+                default: setVoiceFeedback("Command not recognized");
+            }
+
+            setTimeout(() => setVoiceFeedback(null), 3000);
+          };
+          // Stop all tracks
+          stream.getTracks().forEach(track => track.stop());
+        };
+
+        mediaRecorder.start();
+        setIsRecordingVoice(true);
+        setVoiceFeedback("Listening...");
+      } catch (err) {
+        console.error("Mic Error:", err);
+        setVoiceFeedback("Mic Access Denied");
+      }
     }
+  };
+
+  // Initialize Player
+  useEffect(() => {
+    if (activeYoutubeUrl && (window as any).YT && (window as any).YT.Player) {
+      setTimeout(() => {
+          if (playerRef.current) return;
+          playerRef.current = new (window as any).YT.Player('neural-sop-frame', {
+              events: { 'onStateChange': (event: any) => {} }
+          });
+      }, 1000);
+    } else if (!activeYoutubeUrl) {
+        playerRef.current = null;
+    }
+  }, [activeYoutubeUrl]);
+
+  // Smart Pause
+  useEffect(() => {
+      if (!activeYoutubeUrl || !playerRef.current || isStepWaiting || sopSteps.length === 0) return;
+      if (typeof playerRef.current.getCurrentTime !== 'function') return;
+      const interval = setInterval(() => {
+          try {
+              const time = playerRef.current.getCurrentTime();
+              const currentStep = sopSteps[currentStepIndex];
+              if (currentStep && time >= currentStep.timestamp) {
+                  playerRef.current.pauseVideo();
+                  setIsStepWaiting(true);
+              }
+          } catch (e) {}
+      }, 500);
+      return () => clearInterval(interval);
+  }, [activeYoutubeUrl, currentStepIndex, isStepWaiting, sopSteps]);
+
+  const handleStepConfirm = () => {
+      setIsStepWaiting(false);
+      if (currentStepIndex < sopSteps.length - 1) {
+          setCurrentStepIndex(prev => prev + 1);
+          playerRef.current.playVideo();
+      } else {
+          alert("SOP Complete.");
+          setActiveYoutubeUrl(null);
+          setSopSteps([]);
+          setCurrentStepIndex(0);
+          setCurrentThumbnail(null);
+      }
+  };
+
+  const handleGoogleExport = (type: 'DOCS' | 'SHEETS') => console.log(`Exporting ${type}...`);
+
+  const exportLogs = () => {
+    const data = JSON.stringify({ auditLogs, toolHistory }, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'session-telemetry.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  
+  const handleDetectLanguage = async () => {
+      setIsDetectingLang(true);
+      const result = await detectLanguageFromAudio(apiKey, ""); 
+      setLanguage(result.code);
+      setIsDetectingLang(false);
   };
 
   const handleYoutubeSubmit = async () => {
       if (!youtubeUrl) return;
-      setIsImportingYt(true);
+      setIsProcessingYt(true);
       try {
           const data = await processYoutubeVideo(apiKey, youtubeUrl);
-          setReferenceData(null); // Clear image reference
           setActiveYoutubeUrl(youtubeUrl);
-          setSopSteps(data.steps);
-          setProtocolText(`Protocol extracted from video source: ${data.title}`);
-          speak("Video processed. Protocol steps extracted. Supervisor mode ready.");
-          setYoutubeUrl(""); // Clear input
-          // Reset player state
-          setCurrentVideoStepIndex(0);
-          setShowGoldenFrame(false);
-          setIsVideoPlaying(false);
-          // Auto switch to Supervisor mode if not enabled
-          setIsSupervisorMode(true);
-      } catch (e) {
-          showError("Failed to import YouTube video. Check URL.");
-      }
-      setIsImportingYt(false);
+          setCurrentThumbnail(data.thumbnail);
+          const sortedSteps = data.steps.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+          setSopSteps(sortedSteps);
+          setCurrentStepIndex(0);
+          setIsStepWaiting(false);
+          setYoutubeUrl(""); 
+      } catch (e) { console.error(e); }
+      setIsProcessingYt(false);
   };
 
-  const handleScanManual = () => {
-      if (webcamRef.current) {
-          const screenshot = webcamRef.current.getScreenshot();
-          if (screenshot) {
-              setReferenceData(screenshot);
-              setGhostPos({ x: 0, y: 0 });
-              setSopSteps([]);
-              setPreFlightStatus('IDLE');
-              setHazards([STATIC_HAZARD_ZONE]);
-              setIsArmed(false);
-              setActiveYoutubeUrl(null);
-              speak("Manual captured. Ready to digitize.");
+  const handlePPEScan = async () => {
+      if (!webcamRef.current) return;
+      setIsScanningPPE(true);
+      
+      const imageSrc = webcamRef.current.getScreenshot();
+      if (imageSrc) {
+          const result = await checkPPE(apiKey, imageSrc);
+          setPpeResult(result);
+          if (result.compliant) {
+              setTimeout(() => setIsShiftActive(true), 800);
           }
       }
+      setIsScanningPPE(false);
+  };
+
+  const runAnalysis = async () => {
+      setIsAnalyzing(true);
+      if (webcamRef.current) {
+          const imageSrc = webcamRef.current.getScreenshot();
+          if (imageSrc) {
+              const currentStepText = sopSteps.length > 0 && currentStepIndex < sopSteps.length 
+                  ? sopSteps[currentStepIndex].text 
+                  : "Standard Operating Procedure";
+
+              const hazards = isHazardDetected ? [{ label: "High Voltage Zone", boundingBox: [100, 600, 300, 900] }] : [];
+
+              const result = await analyzeCompliance(
+                  apiKey, 
+                  imageSrc, 
+                  null, 
+                  `Verify step: ${currentStepText}`, 
+                  language,
+                  hazards
+              );
+              setLastResult(result);
+              
+              if (result.status === ComplianceStatus.DRIFT) {
+                  // --- AUTOMATED INCIDENT REPORTING ---
+                  let reportUrl: string | undefined = undefined;
+                  
+                  if (result.drift_severity === DriftSeverity.CRITICAL) {
+                      const logEntryForReport: AuditLogEntry = {
+                          id: Date.now().toString(),
+                          timestamp: new Date().toLocaleTimeString(),
+                          severity: result.drift_severity,
+                          reasoning: result.correction_voice
+                      };
+                      reportUrl = generateIncidentReport(logEntryForReport, imageSrc);
+                      
+                      // Simulated Toast Notification
+                      alert("CRITICAL DRIFT: Incident Report Generated & Logged.");
+                  }
+
+                  const newLog: AuditLogEntry = {
+                      id: Date.now().toString(),
+                      timestamp: new Date().toLocaleTimeString(),
+                      severity: result.drift_severity,
+                      reasoning: result.correction_voice,
+                      reportUrl: reportUrl
+                  };
+                  setAuditLogs(prev => [newLog, ...prev]);
+              }
+          }
+      }
+      setIsAnalyzing(false);
   };
   
-  const handleGenerateSchematic = async () => {
-    setIsGeneratingSchematic(true);
-    try {
-      const imageBase64 = await generateSchematic(apiKey);
-      setReferenceData(imageBase64);
-      setPreFlightStatus('IDLE');
-      setIsArmed(false);
-      setActiveYoutubeUrl(null);
-    } catch (e) { console.error(e); showError("Schematic generation failed."); }
-    setIsGeneratingSchematic(false);
-  };
-
-  const handleDigitizeSOP = async () => {
-      if (!referenceData) return;
-      setIsDigitizing(true);
-      try {
-          const steps = await digitizeSOP(apiKey, referenceData);
-          setSopSteps(steps);
-          speak("SOP digitized.");
-      } catch (e) { console.error(e); showError("SOP digitization failed."); }
-      setIsDigitizing(false);
-  };
-
-  const toggleStep = (id: number) => {
-      setSopSteps(prev => prev.map(s => s.id === id ? { ...s, completed: !s.completed } : s));
-  };
-  
-  const handleGoogleExport = (type: 'DOCS' | 'SHEETS') => {
-      // Simulate Export
-      showInfo(`Syncing with Google ${type === 'DOCS' ? 'Docs' : 'Sheets'}...`);
-      setTimeout(() => {
-          showInfo(`Success. Entropy Report saved to Drive.`);
-          // Create dummy download to simulate file generation
-          const content = type === 'DOCS' 
-              ? `ENTROPY GUARD REPORT\n\nDate: ${new Date().toLocaleString()}\nDrifts Detected: ${auditLogs.length}\nWaste Prevented: ${greenScore}g\n\nLogs:\n${auditLogs.map(l => `- [${l.severity}] ${l.timestamp}: ${l.reasoning}`).join('\n')}`
-              : `Timestamp,Severity,Reasoning\n${auditLogs.map(l => `${l.timestamp},${l.severity},"${l.reasoning}"`).join('\n')}`;
-          
-          const blob = new Blob([content], { type: type === 'DOCS' ? 'text/plain' : 'text/csv' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `Entropy_Report_${type}.${type === 'DOCS' ? 'txt' : 'csv'}`;
-          a.click();
-      }, 1500);
-      setIsExportMenuOpen(false);
-  };
-
-  const handleExportMarkdown = () => {
-      if (sopSteps.length === 0) return;
-      showInfo("Generating Markdown documentation...");
-      
-      const mdContent = `
-# Standard Operating Procedure (SOP)
-**Generated by EntropyGuard AI**
-
-**Source:** ${activeYoutubeUrl || "Manual/Scan"}
-**Date:** ${new Date().toLocaleDateString()}
-
-## Protocol Steps
-${sopSteps.map(step => `
-### Step ${step.id}
-**Instruction:** ${step.text}
-${step.tools && step.tools.length ? `**Tools Required:** ${step.tools.join(', ')}` : ''}
-${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString().substr(14, 5)}` : ''}
-- [${step.completed ? 'x' : ' '}] Verified
-`).join('\n')}
-
----
-*Generated by EntropyGuard Neural Engine*
-      `.trim();
-
-      const blob = new Blob([mdContent], { type: 'text/markdown' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `SOP_Protocol_${new Date().toISOString().split('T')[0]}.md`;
-      a.click();
-      speak("Markdown documentation exported.");
-      setIsExportMenuOpen(false);
-  };
-
-  const handleSaveMasterPDF = () => {
-      showInfo("Compiling PDF from video segments...");
-      setTimeout(() => {
-          showInfo("SOP PDF downloaded.");
-          const blob = new Blob(["Simulated PDF Content from Gemini Vision Analysis"], { type: 'application/pdf' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `Master_SOP_${new Date().toISOString()}.pdf`;
-          a.click();
-      }, 1500);
-      setIsExportMenuOpen(false);
-  };
-
-  const handleSaveToLibrary = () => {
-      showInfo("Saving Protocol to Neural Library...");
-      setTimeout(() => {
-          showInfo("Saved to Enterprise Library.");
-          speak("Protocol archived.");
-      }, 1000);
-      setIsExportMenuOpen(false);
-  };
-
-  const exportLogs = () => {
-      // Export based on current view
-      const dataToExport = telemetryView === 'DRIFT' ? auditLogs : toolHistory;
-      const filename = telemetryView === 'DRIFT' ? 'entropy_audit' : 'tool_verification_history';
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(dataToExport, null, 2));
-      const downloadAnchorNode = document.createElement('a');
-      downloadAnchorNode.setAttribute("href", dataStr);
-      downloadAnchorNode.setAttribute("download", `${filename}_${new Date().toISOString()}.json`);
-      document.body.appendChild(downloadAnchorNode);
-      downloadAnchorNode.click();
-      downloadAnchorNode.remove();
-  };
-
-  const isPdf = referenceData?.startsWith('data:application/pdf');
-  const ghostImageSrc = (!isPdf && referenceData) ? referenceData : null;
-
-  // Calculate Active Step
-  const firstIncompleteIndex = sopSteps.findIndex(s => !s.completed);
+  const tutorialSteps: TutorialStep[] = [
+      {
+          targetId: 'sop-toggle',
+          title: 'Neural SOP',
+          content: 'Open the Standard Operating Procedure module to import video protocols.',
+          position: 'bottom'
+      },
+      { 
+          targetId: 'telemetry-drawer', 
+          title: 'Asynchronous Telemetry', 
+          content: 'Review cognitive drift events and instrument verifications here.', 
+          position: 'top' 
+      }
+  ];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden selection:bg-cyan-500/30">
-      <TutorialOverlay steps={TUTORIAL_STEPS} isOpen={isTutorialOpen} onClose={handleTutorialClose} />
+    <div className="min-h-screen bg-slate-950 text-white overflow-hidden relative font-sans selection:bg-cyan-500/30">
       <SettingsModal 
-        isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} apiKey={apiKey} 
-        setApiKey={handleSetApiKey} privacyMode={privacyEngine} setPrivacyMode={setPrivacyEngine}
-        isModelLoaded={isModelLoaded} language={language}
-        onDetectLanguage={detectLanguage}
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)}
+        apiKey={apiKey}
+        setApiKey={setApiKey}
+        privacyMode={privacyMode}
+        setPrivacyMode={setPrivacyMode}
+        isModelLoaded={!!handModel}
+        language={language}
+        onDetectLanguage={handleDetectLanguage}
         isDetectingLang={isDetectingLang}
       />
 
-      {/* Header - Material 3 Sticky Surface */}
-      <header className="fixed top-0 left-0 right-0 z-50 bg-slate-950/80 backdrop-blur-xl border-b border-white/5 px-6 py-4 flex justify-between items-center transition-all duration-300">
-        <div className="flex items-center gap-4">
-          <div className={`p-2.5 rounded-2xl bg-slate-800/50 border border-white/5 ${isArmed ? 'text-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.3)]' : 'text-slate-400'}`}>
-             <BrainCircuit size={24} strokeWidth={2} />
-          </div>
-          <div className="flex flex-col">
-            <h1 className="text-xl font-bold tracking-tight text-white font-sans leading-none mb-1">EntropyGuard <span className="text-cyan-500 text-xs align-top">V3.0 HYBRID</span></h1>
-            <div className="flex items-center gap-2">
-                <span className={`w-1.5 h-1.5 rounded-full ${isArmed ? 'bg-cyan-500 animate-pulse' : 'bg-slate-600'}`}></span>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Dual-Inference Pipeline</p>
-            </div>
-          </div>
-        </div>
-        
-        {/* Architecture Visualization Widget (Neural Telemetry) */}
-        <div className="hidden lg:flex items-center gap-1 bg-slate-900/50 border border-white/5 rounded-lg p-1.5">
-            <div className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase transition-all flex items-center gap-2 ${isArmed || isGestureEnabled ? 'bg-cyan-950 text-cyan-400' : 'text-slate-600'}`}>
-                <Activity size={12} className={isArmed || isGestureEnabled ? "animate-pulse" : ""} />
-                Edge: {edgeLatency > 0 ? `${edgeLatency}ms` : "IDLE"} {edgeFPS > 0 && `(${edgeFPS} FPS)`}
-            </div>
-            <div className="w-px h-4 bg-white/10" />
-            <div className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase transition-all flex items-center gap-2 ${isAnalyzing ? 'bg-indigo-950 text-indigo-400' : 'text-slate-600'}`}>
-                <Sparkles size={12} className={isAnalyzing ? "animate-pulse" : ""} />
-                Cloud: {cloudLatency > 0 ? `${cloudLatency}ms` : "IDLE"}
-            </div>
-             <div className="w-px h-4 bg-white/10" />
-            <div className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase transition-all flex items-center gap-2 ${vectorIndexStatus === 'READY' ? 'bg-green-950 text-green-400' : vectorIndexStatus !== 'IDLE' ? 'bg-amber-950 text-amber-400' : 'text-slate-600'}`}>
-                <Database size={12} className={vectorIndexStatus === 'READY' ? "" : vectorIndexStatus !== 'IDLE' ? "animate-bounce" : ""} />
-                RAG: {vectorIndexStatus}
-            </div>
-        </div>
+      {isShiftActive && (
+          <TutorialOverlay 
+            isOpen={isTutorialOpen}
+            onClose={() => setIsTutorialOpen(false)}
+            steps={tutorialSteps}
+          />
+      )}
 
-        <div className="flex items-center gap-3">
-             <div className="relative">
+      <div className="relative h-screen flex flex-col">
+          <header className="absolute top-0 left-0 right-0 p-4 z-40 flex justify-between items-center bg-gradient-to-b from-black/90 to-transparent pointer-events-none">
+             <div className="pointer-events-auto flex items-center gap-2">
+                <Scan className="text-cyan-400" />
+                <div>
+                    <h1 className="font-bold tracking-wider text-sm md:text-base leading-none">ENTROPYGUARD</h1>
+                    <span className="text-[10px] text-cyan-500/70 font-mono tracking-widest">HYBRID EDGE-CLOUD ARCHITECTURE</span>
+                </div>
+             </div>
+             
+             <div className="hidden md:flex gap-4 pointer-events-auto bg-black/40 backdrop-blur-md rounded-full px-4 py-1.5 border border-white/5">
+                 <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
+                     <Cpu size={12} className={handModel ? "text-green-400" : "text-yellow-400"} />
+                     <span>EDGE: {fps} FPS</span>
+                 </div>
+                 <div className="w-px h-3 bg-white/10"></div>
+                 <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
+                     <Layers size={12} className="text-cyan-400" />
+                     <span>MODEL: GEMINI 3 PRO</span>
+                 </div>
+             </div>
+
+             <div className="pointer-events-auto flex items-center gap-3">
                  <button 
-                    onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold transition-all border ${isExportMenuOpen ? 'bg-slate-800 text-white border-white/20' : 'bg-slate-900 border-white/10 text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+                    data-tour-id="sop-toggle"
+                    onClick={() => setIsSopOpen(!isSopOpen)}
+                    disabled={!isShiftActive}
+                    className={`p-2.5 rounded-full transition-all border ${isSopOpen ? 'bg-cyan-500 text-white border-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.5)]' : 'bg-slate-900/80 text-slate-400 border-white/10 hover:text-white'} ${!isShiftActive ? 'opacity-50' : ''}`}
                  >
-                     <Share2 size={16} />
-                     <span className="hidden md:inline">EXPORT</span>
+                     <BrainCircuit size={20} />
                  </button>
-                 
-                 {isExportMenuOpen && (
-                     <div className="absolute top-full right-0 mt-2 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1 z-50 animate-in fade-in zoom-in-95 duration-200">
-                         <button onClick={handleSaveMasterPDF} className="w-full text-left px-4 py-3 hover:bg-slate-800 rounded-lg text-sm text-slate-300 hover:text-white flex items-center gap-3 transition-colors">
-                             <FileDown size={16} /> Download PDF
-                         </button>
-                         <button onClick={handleExportMarkdown} className="w-full text-left px-4 py-3 hover:bg-slate-800 rounded-lg text-sm text-slate-300 hover:text-white flex items-center gap-3 transition-colors">
-                             <FileJson size={16} /> Export Markdown
-                         </button>
-                         <button onClick={handleSaveToLibrary} className="w-full text-left px-4 py-3 hover:bg-slate-800 rounded-lg text-sm text-slate-300 hover:text-white flex items-center gap-3 transition-colors border-t border-slate-800 mt-1">
-                             <Library size={16} /> Save to Library
+                 <button onClick={() => setIsSettingsOpen(true)} className="p-2.5 bg-slate-900/80 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white border border-white/10 transition-all">
+                    <Settings size={20} />
+                 </button>
+             </div>
+          </header>
+
+          <div className="flex-1 relative bg-slate-900 flex items-center justify-center overflow-hidden">
+             
+             {/* Neural SOP Side Panel */}
+             <div className={`absolute left-0 top-0 bottom-0 z-30 bg-slate-950/95 backdrop-blur-2xl border-r border-white/10 transition-all duration-500 cubic-bezier(0.4, 0, 0.2, 1) flex flex-col ${isSopOpen ? 'w-full md:w-[28rem] translate-x-0 shadow-2xl' : 'w-[28rem] -translate-x-full'}`}>
+                 <div className="p-6 pt-24 flex flex-col h-full overflow-y-auto">
+                     <div className="flex items-center justify-between mb-6">
+                         <h2 className="text-lg font-bold flex items-center gap-2 text-cyan-400">
+                             <Youtube size={20} /> Neural SOP
+                         </h2>
+                         <button onClick={() => setIsSopOpen(false)} className="md:hidden p-2 text-slate-500 hover:text-white">
+                             <X size={20} />
                          </button>
                      </div>
-                 )}
-             </div>
 
-             <button
-                onClick={detectLanguage}
-                disabled={isDetectingLang}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold transition-all border ${isDetectingLang ? 'bg-cyan-950/50 text-cyan-400 border-cyan-500/30' : 'bg-slate-900 border-white/10 text-slate-400 hover:bg-slate-800 hover:text-white hover:border-white/20'}`}
-             >
-                 {isDetectingLang ? <Activity size={16} className="animate-spin" /> : <Languages size={16} />}
-                 <span className="hidden md:inline">{isDetectingLang ? "ANALYZING..." : language === 'auto' ? "AUTO LANG" : language.toUpperCase()}</span>
-             </button>
-
-             <div data-tour-id="voice-indicator" className={`flex items-center gap-2 px-4 py-2.5 rounded-full border border-white/5 bg-slate-900 ${isListening ? 'text-green-400 border-green-900/50' : 'text-slate-500'}`}>
-                 <Mic size={16} />
-                 <span className="text-xs font-bold hidden md:inline">{isListening ? "LISTENING" : "MUTE"}</span>
-             </div>
-
-             <button onClick={startTutorial} className="p-2.5 hover:bg-slate-800 rounded-full transition-all text-slate-400 hover:text-white border border-transparent hover:border-white/10" title="Start Tutorial">
-                <HelpCircle size={22} />
-             </button>
-             
-             <button onClick={() => setIsSettingsOpen(true)} className="p-2.5 hover:bg-slate-800 rounded-full transition-all text-slate-400 hover:text-white border border-transparent hover:border-white/10">
-                <Settings size={22} />
-             </button>
-        </div>
-      </header>
-
-      {/* Main Content - Material 3 Surface Containers */}
-      <main className="flex-1 flex flex-col lg:flex-row h-full overflow-hidden p-6 gap-6 pt-24 pb-20">
-        
-        {/* Left Surface: Reference Standard / Master Mode / Neural SOP */}
-        <div data-tour-id="ref-panel" className="w-full lg:w-1/3 bg-slate-900/50 rounded-[2rem] border border-white/5 flex flex-col relative overflow-hidden shadow-2xl backdrop-blur-sm transition-colors hover:bg-slate-900/60">
-          <div className="p-6 border-b border-white/5 flex flex-col gap-4">
-             <div className="flex items-center justify-between">
-                 <div className="flex items-center gap-3">
-                     <button onClick={() => setIsMasterMode(!isMasterMode)} className={`p-2 rounded-full transition-all ${isMasterMode ? 'bg-red-500 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}>
-                         <Video size={18} />
-                     </button>
-                     <h2 className="text-sm font-bold text-slate-200 flex items-center gap-2 uppercase tracking-wider">
-                        {isMasterMode ? "Master Studio" : "Reference Standard"}
-                     </h2>
-                 </div>
-                 
-                 {!isMasterMode && referenceData && sopSteps.length === 0 && activeTab === 'DOCS' && (
-                     <button onClick={handleDigitizeSOP} disabled={isDigitizing} className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-full font-bold transition-all border border-white/5 hover:border-white/10 flex items-center gap-2">
-                         {isDigitizing ? <div className="animate-spin w-3 h-3 border-2 border-current rounded-full"/> : <Zap size={14} />}
-                         DIGITIZE SOP
-                     </button>
-                 )}
-             </div>
-
-             {/* Tab Switcher */}
-             {!isMasterMode && (
-                 <div className="flex bg-slate-950 rounded-lg p-1 border border-white/5">
-                     <button 
-                        onClick={() => setActiveTab('DOCS')}
-                        className={`flex-1 py-2 text-xs font-bold rounded-md transition-all flex items-center justify-center gap-2 ${activeTab === 'DOCS' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-400'}`}
-                     >
-                         <FileText size={14} /> MANUALS
-                     </button>
-                     <button 
-                        onClick={() => setActiveTab('SOP_ENGINE')}
-                        data-tour-id="sop-engine-tab"
-                        className={`flex-1 py-2 text-xs font-bold rounded-md transition-all flex items-center justify-center gap-2 ${activeTab === 'SOP_ENGINE' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-400'}`}
-                     >
-                         <BrainCircuit size={14} /> NEURAL SOP
-                     </button>
-                 </div>
-             )}
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
-            {isMasterMode ? (
-                <div className="flex flex-col h-full">
-                    {/* Master Mode Content (Unchanged) */}
-                    {masterSopSteps.length === 0 && !isRecording && !isProcessingVideo ? (
-                         <div className="flex flex-col items-center justify-center flex-1 text-center opacity-60">
-                             <Video size={48} className="mb-4 text-slate-500" />
-                             <p className="text-sm font-bold text-slate-300">Master Protocol Generation</p>
-                             <p className="text-xs text-slate-500 max-w-xs mt-2">Record an expert performing the task. Gemini will analyze the video frames and generate a visual SOP automatically.</p>
-                         </div>
-                    ) : isRecording ? (
-                         <div className="flex flex-col items-center justify-center flex-1">
-                             <div className="w-20 h-20 rounded-full border-4 border-red-500 flex items-center justify-center animate-pulse">
-                                 <div className="w-10 h-10 bg-red-500 rounded-sm" />
-                             </div>
-                             <p className="mt-6 text-red-400 font-bold tracking-widest animate-pulse">RECORDING EXPERT SESSION...</p>
-                         </div>
-                    ) : isProcessingVideo ? (
-                         <div className="flex flex-col items-center justify-center flex-1">
-                             <div className="animate-spin w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full mb-6" />
-                             <p className="text-indigo-400 font-bold tracking-widest">ANALYZING FRAMES...</p>
-                         </div>
-                    ) : (
-                         <div className="space-y-4">
-                             <ul className="space-y-4">
-                                 {masterSopSteps.map((step) => (
-                                     <li key={step.id} className="bg-slate-800/50 rounded-xl overflow-hidden border border-white/5">
-                                         <div className="h-32 bg-slate-900 relative">
-                                             <img src={step.frameData} alt={`Step ${step.id}`} className="w-full h-full object-cover" />
-                                             <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-[10px] font-bold text-white backdrop-blur-md">STEP {step.id}</div>
-                                         </div>
-                                         <div className="p-3 text-sm text-slate-300 font-medium">
-                                             {step.text}
-                                         </div>
-                                     </li>
-                                 ))}
-                             </ul>
+                     {!activeYoutubeUrl ? (
+                         <div className="bg-slate-900/50 border border-dashed border-slate-700 rounded-2xl p-6 text-center">
+                             <p className="text-sm text-slate-400 mb-4">Paste a protocol video URL to generate safety checks.</p>
+                             <input 
+                                type="text" 
+                                value={youtubeUrl}
+                                onChange={(e) => setYoutubeUrl(e.target.value)}
+                                placeholder="https://youtube.com/..."
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-sm mb-3 focus:border-cyan-500 focus:outline-none transition-colors"
+                             />
                              <button 
-                                onClick={handleSaveMasterPDF} 
-                                className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-bold text-xs tracking-wide border border-white/10 flex items-center justify-center gap-2 transition-all mt-4"
+                                onClick={handleYoutubeSubmit}
+                                disabled={!youtubeUrl || isProcessingYt}
+                                className="w-full bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-bold py-3 rounded-lg text-sm flex items-center justify-center gap-2 transition-all"
                              >
-                                <FileOutput size={16} /> SAVE PROTOCOL AS PDF
+                                {isProcessingYt ? <Activity className="animate-spin" size={16}/> : <Wand2 size={16}/>}
+                                GENERATE PROTOCOL
                              </button>
                          </div>
-                    )}
-                    
-                    {!isProcessingVideo && !masterSopSteps.length && (
-                        <div className="mt-6">
-                            <button 
-                                onClick={() => setIsRecording(!isRecording)} 
-                                className={`w-full py-4 rounded-xl font-bold text-sm tracking-wide transition-all shadow-lg flex items-center justify-center gap-3 ${
-                                    isRecording 
-                                    ? 'bg-slate-800 text-white border border-red-500/50' 
-                                    : 'bg-gradient-to-r from-red-600 to-orange-600 text-white hover:from-red-500 hover:to-orange-500'
-                                }`}
-                            >
-                                {isRecording ? <><Square size={18} fill="currentColor" /> STOP RECORDING</> : <><Video size={18} /> START RECORDING</>}
-                            </button>
-                        </div>
-                    )}
-                </div>
-            ) : (
-                <>
-                {/* Neural SOP Engine Input */}
-                {activeTab === 'SOP_ENGINE' && !activeYoutubeUrl && (
-                     <div className="flex flex-col gap-6 animate-in slide-in-from-right-4 fade-in">
-                        <div className="text-center p-6 border-2 border-dashed border-slate-800 rounded-[1.5rem] bg-slate-950/30 flex flex-col items-center justify-center min-h-[16rem]">
-                             <Youtube size={48} className="text-red-500 mb-4 opacity-80" />
-                             <h3 className="text-white font-bold text-lg mb-2">Import Tutorial</h3>
-                             <p className="text-slate-500 text-sm mb-6 max-w-xs">Paste a YouTube URL to generate an interactive safety protocol with Golden Frame alignment.</p>
-                             
-                             <div className="w-full max-w-xs space-y-3">
-                                 <input 
-                                    type="text" 
-                                    placeholder="Paste YouTube URL..." 
-                                    value={youtubeUrl}
-                                    onChange={(e) => setYoutubeUrl(e.target.value)}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-500 transition-colors"
-                                 />
-                                 <button 
-                                    onClick={handleYoutubeSubmit}
-                                    disabled={!youtubeUrl || isImportingYt}
-                                    className="w-full py-3 bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-500 hover:to-orange-500 text-white rounded-xl font-bold text-sm shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
-                                 >
-                                    {isImportingYt ? <div className="animate-spin w-4 h-4 border-2 border-white rounded-full"/> : <Wand2 size={16} />}
-                                    GENERATE SAFETY PROTOCOL
-                                 </button>
-                             </div>
-                        </div>
-                     </div>
-                )}
-
-                {/* Docs/File Upload Input */}
-                {activeTab === 'DOCS' && !referenceData && (
-                    <div className="h-96 lg:h-[30rem] bg-slate-950/50 border-2 border-dashed border-slate-800 rounded-[1.5rem] relative overflow-hidden group flex flex-col items-center justify-center transition-colors hover:border-slate-700 animate-in slide-in-from-left-4 fade-in">
-                        <div className="text-center p-6 max-w-sm w-full flex flex-col gap-4">
-                           <div className="flex justify-center gap-4 opacity-30 text-slate-400">
-                              <ImageIcon size={40} /><FileText size={40} />
-                           </div>
-                           <div>
-                               <p className="text-sm font-bold text-slate-400 mb-1">Load RAG Standard</p>
-                               <p className="text-[10px] text-slate-600">Drag & drop blueprints, PDFs for Vector Indexing.</p>
-                           </div>
-                           <div className="grid grid-cols-2 gap-3 w-full">
-                                <label className={`flex flex-col items-center justify-center gap-2 bg-slate-800/50 hover:bg-slate-800 p-4 rounded-xl cursor-pointer border border-white/5 hover:border-white/10 transition-all ${vectorIndexStatus !== 'IDLE' && vectorIndexStatus !== 'READY' ? 'opacity-50 cursor-wait' : ''}`}>
-                                    <Upload size={20} className="text-indigo-400" />
-                                    <span className="text-[10px] font-bold">{vectorIndexStatus === 'IDLE' || vectorIndexStatus === 'READY' ? "UPLOAD & INDEX" : vectorIndexStatus}</span>
-                                    <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload} className="hidden" disabled={vectorIndexStatus !== 'IDLE' && vectorIndexStatus !== 'READY'} />
-                                </label>
-                                <button onClick={handleScanManual} className="flex flex-col items-center justify-center gap-2 bg-slate-800/50 hover:bg-slate-800 p-4 rounded-xl cursor-pointer border border-white/5 hover:border-white/10 transition-all">
-                                    <Camera size={20} className="text-green-400" />
-                                    <span className="text-[10px] font-bold">SCAN MANUAL</span>
-                                </button>
-                           </div>
-                           <button onClick={handleGenerateSchematic} disabled={isGeneratingSchematic} className="w-full py-3 bg-slate-900/50 hover:bg-purple-900/20 text-purple-300 rounded-xl font-bold text-[10px] tracking-wide border border-purple-500/20 hover:border-purple-500/50 flex items-center justify-center gap-2 transition-all">
-                                  {isGeneratingSchematic ? <div className="animate-spin w-3 h-3 border-2 border-current rounded-full" /> : <Sparkles size={14} />}
-                                  {isGeneratingSchematic ? "GENERATING..." : "GENERATE AI SCHEMATIC"}
-                           </button>
-                        </div>
-                    </div>
-                )}
-                
-                {/* Active Content View (Video or Doc) */}
-                {(activeYoutubeUrl || referenceData) && (
-                    <div className="flex flex-col gap-4 animate-in zoom-in-95 duration-300">
-                        {/* Reference Image Viewer */}
-                        {referenceData && (
-                            <div className="relative h-64 lg:h-80 bg-slate-950 rounded-2xl overflow-hidden border border-white/10 group">
-                                {isPdf ? (
-                                    <object data={referenceData} type="application/pdf" className="w-full h-full object-contain p-4">
-                                        <div className="flex flex-col items-center justify-center h-full text-slate-500"><FileText size={64} className="mb-4 opacity-50"/><p className="font-bold">PDF Reference Loaded</p></div>
-                                    </object>
-                                ) : (
-                                    <img src={referenceData} alt="Reference" className="w-full h-full object-contain p-4 opacity-90 transition-opacity hover:opacity-100" />
-                                )}
-                                <div className="absolute top-4 right-4 flex gap-2 z-10">
-                                    <span className="bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full text-[10px] font-bold text-green-400 border border-green-500/30 flex items-center gap-2">
-                                        <Database size={12} /> RAG INDEX: ACTIVE
-                                    </span>
-                                    <button onClick={() => setReferenceData(null)} className="bg-slate-900/80 hover:bg-red-900/80 p-1.5 rounded-full text-white border border-white/10 transition-colors"><X size={16} /></button>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* YouTube Player */}
-                        {activeYoutubeUrl && (
-                            <div className={`rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-black relative mb-2 transition-all aspect-video group`}>
-                                <ReactPlayer
-                                    ref={playerRef}
-                                    url={activeYoutubeUrl}
-                                    width="100%"
-                                    height="100%"
-                                    controls
-                                    playing={isVideoPlaying}
-                                    onPlay={() => setIsVideoPlaying(true)}
-                                    onPause={() => setIsVideoPlaying(false)}
-                                    onEnded={() => setIsVideoPlaying(false)}
-                                    onProgress={handleVideoProgress}
+                     ) : (
+                         <div className="space-y-6 animate-in slide-in-from-left-4 fade-in">
+                             {/* Neural Player */}
+                             <div className="w-full aspect-video bg-black rounded-xl overflow-hidden shadow-2xl relative group border border-white/10">
+                                <iframe
+                                    id="neural-sop-frame"
+                                    src={`https://www.youtube-nocookie.com/embed/${getYouTubeID(activeYoutubeUrl)}?rel=0&modestbranding=1&origin=${window.location.origin}&enablejsapi=1`}
+                                    className="w-full h-full"
+                                    title="Neural SOP Player"
+                                    frameBorder="0"
+                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                    referrerPolicy="no-referrer"
+                                    sandbox="allow-scripts allow-same-origin allow-presentation"
+                                    loading="lazy"
                                 />
-                                <div className="absolute top-4 right-4 z-20">
-                                     <button onClick={() => { setActiveYoutubeUrl(null); setSopSteps([]); }} className="bg-slate-900/80 hover:bg-red-900/80 p-1.5 rounded-full text-white border border-white/10 transition-colors"><X size={16} /></button>
-                                </div>
-                            </div>
-                        )}
-                        
-                        {/* Timeline Steps */}
-                        {sopSteps.length > 0 && (
-                            <div className="flex flex-col gap-2">
-                                <div className="flex items-center justify-between px-2">
-                                     <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                                         <Layers size={14} /> Action Timeline
-                                     </h3>
-                                     {activeYoutubeUrl && (
-                                         <button 
-                                            onClick={() => setIsSupervisorMode(!isSupervisorMode)}
-                                            className={`text-[10px] font-bold px-3 py-1.5 rounded-full border transition-all flex items-center gap-2 ${isSupervisorMode ? 'bg-green-900/30 text-green-400 border-green-500/30 animate-pulse' : 'bg-slate-800 text-slate-400 border-white/10'}`}
+                                <button 
+                                    onClick={() => { setActiveYoutubeUrl(null); setSopSteps([]); setCurrentThumbnail(null); }} 
+                                    className="absolute top-2 right-2 z-20 bg-black/60 hover:bg-red-600/90 text-white p-1.5 rounded-full transition-colors backdrop-blur-sm opacity-0 group-hover:opacity-100 duration-200"
+                                >
+                                    <X size={14}/>
+                                </button>
+                                {isStepWaiting && (
+                                    <div className="absolute inset-0 z-10 bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center text-center p-6 animate-in fade-in">
+                                        <div className="w-12 h-12 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center mb-3">
+                                            <Pause size={24} fill="currentColor" />
+                                        </div>
+                                        <h3 className="text-lg font-bold text-white mb-1">Step {currentStepIndex + 1} Milestone</h3>
+                                        <p className="text-sm text-slate-300 mb-6">{sopSteps[currentStepIndex]?.text}</p>
+                                        <button 
+                                            onClick={handleStepConfirm}
+                                            className="px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-black font-bold rounded-full flex items-center gap-2 transition-all shadow-lg hover:shadow-cyan-500/25"
                                         >
-                                            <Zap size={12} /> {isSupervisorMode ? "SUPERVISOR ACTIVE" : "ENABLE SUPERVISOR"}
+                                            <CheckCircle size={16} /> CONFIRM & CONTINUE
                                         </button>
-                                     )}
-                                </div>
-                                <ul className="space-y-3 pb-4">
-                                    {sopSteps.map((step, index) => {
-                                        const isActive = !step.completed && (isSupervisorMode ? index === currentVideoStepIndex : index === firstIncompleteIndex);
-                                        return (
-                                        <li key={step.id} onClick={() => {
-                                                if (isSupervisorMode) {
-                                                    setCurrentVideoStepIndex(index);
-                                                    setShowGoldenFrame(false);
-                                                } else {
-                                                    toggleStep(step.id)
-                                                }
-                                            }} 
-                                            className={`flex flex-col gap-2 p-4 rounded-2xl cursor-pointer transition-all border ${
-                                            step.completed 
-                                                ? 'bg-green-950/20 border-green-500/20 text-slate-500' 
-                                                : isActive 
-                                                    ? 'bg-indigo-900/30 border-indigo-500/50 text-white shadow-[0_0_15px_rgba(99,102,241,0.15)] ring-1 ring-indigo-500/30' 
-                                                    : 'bg-slate-800/50 border-white/5 text-slate-400 hover:bg-slate-800 hover:border-white/10'
-                                        }`}>
-                                            <div className="flex items-start gap-4">
-                                                {step.completed ? (
-                                                    <CheckCircle size={20} className="shrink-0 mt-0.5 text-green-500" />
-                                                ) : isActive ? (
-                                                    <div className="shrink-0 mt-0.5 relative flex items-center justify-center w-5 h-5">
-                                                        <div className="absolute inset-0 bg-indigo-500/30 rounded-full animate-ping" />
-                                                        <div className="w-2.5 h-2.5 bg-indigo-400 rounded-full shadow-[0_0_10px_rgba(129,140,248,0.8)]" />
-                                                    </div>
-                                                ) : (
-                                                    <div className="shrink-0 mt-0.5 w-5 h-5 border-2 border-slate-600 rounded flex items-center justify-center">
-                                                        <span className="text-[10px] font-bold text-slate-500">{step.id}</span>
-                                                    </div>
-                                                )}
-                                                <div className="flex-1">
-                                                    <div className="flex justify-between items-start">
-                                                        <span className={`text-sm font-medium leading-relaxed block ${step.completed ? 'line-through opacity-50' : isActive ? 'text-indigo-100 font-semibold' : ''}`}>{step.text}</span>
-                                                        {isActive && activeYoutubeUrl && showGoldenFrame && (
-                                                            <button 
-                                                                onClick={(e) => { e.stopPropagation(); handleStepComplete(step.id); }}
-                                                                className="ml-2 bg-green-600 hover:bg-green-500 text-white px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider whitespace-nowrap shadow-lg animate-pulse"
-                                                            >
-                                                                Complete
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    {step.tools && step.tools.length > 0 && (
-                                                        <div className="flex flex-wrap gap-1 mt-2">
-                                                            {step.tools.map((tool, ti) => (
-                                                                <span key={ti} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-950 border border-white/5 text-slate-500 uppercase">{tool}</span>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            
-                                            {/* Filmstrip Metadata */}
-                                            {step.timestamp !== undefined && (
-                                                <div className="pl-9 flex items-center gap-3">
-                                                     <div className="text-[10px] font-mono text-cyan-500 bg-cyan-950/30 px-1.5 rounded flex items-center gap-1">
-                                                         <Play size={8} fill="currentColor" /> {new Date(step.timestamp * 1000).toISOString().substr(14, 5)}
-                                                     </div>
-                                                     {isActive && activeYoutubeUrl && (
-                                                         <button 
-                                                            onClick={(e) => { e.stopPropagation(); setShowGoldenFrame(true); if(playerRef.current) playerRef.current.seekTo(step.timestamp); setIsVideoPlaying(false); }}
-                                                            className="text-[9px] font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 bg-amber-950/30 px-2 py-0.5 rounded border border-amber-500/20"
-                                                         >
-                                                             <ScanEye size={10} /> SHOW GHOST
-                                                         </button>
-                                                     )}
-                                                </div>
-                                            )}
-                                        </li>
-                                    )})}
-                                </ul>
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {/* Protocol Context */}
-                {!activeYoutubeUrl && (
-                    <div>
-                      <label className="text-xs font-bold text-slate-500 mb-3 block uppercase tracking-widest flex items-center gap-2">
-                         <ShieldAlert size={12} /> Protocol Context
-                      </label>
-                      <textarea 
-                        value={protocolText} 
-                        onChange={(e) => setProtocolText(e.target.value)} 
-                        className="w-full h-40 bg-slate-950/50 border border-slate-800 rounded-[1.5rem] p-5 text-sm text-slate-300 font-mono focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 resize-none leading-relaxed transition-all placeholder:text-slate-700"
-                        placeholder="Enter safety protocols here..."
-                      />
-                    </div>
-                )}
-                </>
-            )}
-          </div>
-        </div>
-
-        {/* Right Surface: Live Reality */}
-        <div data-tour-id="video-feed" className="w-full lg:w-2/3 bg-slate-900/50 rounded-[2rem] border border-white/5 flex flex-col overflow-hidden relative shadow-2xl backdrop-blur-sm">
-          
-          {/* Camera Controls Bar */}
-          <div className="absolute top-6 left-6 right-6 z-40 flex items-center justify-between pointer-events-none">
-            <div className="pointer-events-auto flex items-center gap-3 bg-slate-950/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/5">
-                <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : isArmed ? "bg-cyan-500 animate-pulse shadow-[0_0_10px_rgba(34,211,238,0.6)]" : "bg-slate-600"}`} />
-                <h2 className="text-xs font-bold text-white tracking-wide uppercase">{isRecording ? "REC" : "Edge Inference Stream"}</h2>
-            </div>
-
-            <div data-tour-id="ar-controls" className="pointer-events-auto flex items-center gap-2 bg-slate-950/60 backdrop-blur-md p-1.5 rounded-full border border-white/5">
-                <button onClick={() => setIsMacroMode(!isMacroMode)} className={`p-2.5 rounded-full transition-all ${isMacroMode ? 'bg-indigo-500/30 text-indigo-300' : 'text-slate-400 hover:text-white hover:bg-white/5'}`} title="Macro Mode"><Microscope size={20} /></button>
-                <button onClick={() => setIsMirrored(!isMirrored)} className={`p-2.5 rounded-full transition-all ${isMirrored ? 'bg-indigo-500/30 text-indigo-300' : 'text-slate-400 hover:text-white hover:bg-white/5'}`} title="Mirror Feed"><FlipHorizontal size={20} /></button>
-                <button onClick={() => setIsTranslatingEnv(!isTranslatingEnv)} className={`p-2.5 rounded-full transition-all ${isTranslatingEnv ? 'bg-cyan-500/30 text-cyan-300' : 'text-slate-400 hover:text-white hover:bg-white/5'}`} title="Translate Environment"><ScanEye size={20} /></button>
-                <button onClick={() => setIsPrivacyMode(!isPrivacyMode)} className={`p-2.5 rounded-full transition-all ${isPrivacyMode ? 'bg-green-500/30 text-green-300' : 'text-slate-400 hover:text-white hover:bg-white/5'}`} title="Privacy Mode"><EyeOff size={20} /></button>
-                <div className="w-px h-6 bg-white/10 mx-1"></div>
-                <button onClick={() => setIsCalibrating(!isCalibrating)} className={`p-2.5 rounded-full transition-all ${isCalibrating ? 'bg-amber-500/30 text-amber-300' : 'text-slate-400 hover:text-white hover:bg-white/5'}`} disabled={!ghostImageSrc} title="Calibrate AR"><Crosshair size={20} /></button>
-                
-                <div className="flex items-center gap-2 pl-2 pr-3">
-                    <Ghost size={16} className={ghostOpacity > 0 ? "text-cyan-400" : "text-slate-600"} />
-                    <input type="range" min="0" max="100" value={ghostOpacity} onChange={(e) => setGhostOpacity(Number(e.target.value))} className="w-20 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-400" disabled={!ghostImageSrc}/>
-                </div>
-            </div>
-          </div>
-
-          <div className="relative flex-1 bg-black overflow-hidden group">
-            {/* Vignette Overlay */}
-            <div className="absolute inset-0 pointer-events-none z-30 bg-[radial-gradient(circle,transparent_40%,rgba(0,0,0,0.8)_100%)]" />
-            
-            {/* Safety Violation Overlay (Edge Layer Alert) */}
-            {edgeSafetyViolation && (
-                <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none border-[6px] border-red-500 shadow-[inset_0_0_50px_rgba(239,68,68,0.5)] animate-pulse">
-                    <div className="bg-red-600 text-white px-8 py-4 rounded-xl font-bold text-2xl tracking-widest flex items-center gap-4 shadow-2xl">
-                        <Siren size={32} className="animate-bounce" />
-                        SAFETY VIOLATION DETECTED
-                    </div>
-                </div>
-            )}
-
-            {/* Instrument Verifier Reticle */}
-            {isMacroMode && !edgeSafetyViolation && (
-                <div className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none animate-in fade-in duration-300">
-                    <div className={`relative w-72 h-72 transition-all duration-500 ${
-                        toolCheckStatus === 'MATCH' ? 'border-green-500 shadow-[0_0_50px_rgba(34,197,94,0.4)]' :
-                        toolCheckStatus === 'MISMATCH' ? 'border-red-500 shadow-[0_0_50px_rgba(239,68,68,0.4)]' :
-                        'border-cyan-400/50 shadow-[0_0_30px_rgba(34,211,238,0.2)]'
-                    }`}>
-                        {/* Decorative brackets */}
-                        <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-current"/>
-                        <div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-current"/>
-                        <div className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-current"/>
-                        <div className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-current"/>
-                        
-                        {/* Scanning line if analyzing */}
-                        {isAnalyzing && (
-                            <div className="absolute inset-x-0 top-0 h-0.5 bg-current opacity-50 animate-pulse"/>
-                        )}
-                        
-                        {/* Center marker */}
-                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-current rounded-full opacity-80"/>
-
-                        {/* Readout */}
-                        <div className="absolute -bottom-12 left-1/2 -translate-x-1/2 whitespace-nowrap">
-                            <div className={`px-4 py-1.5 rounded-full text-xs font-bold font-mono border backdrop-blur-md ${
-                                toolCheckStatus === 'MATCH' ? 'bg-green-950/80 border-green-500 text-green-400' :
-                                toolCheckStatus === 'MISMATCH' ? 'bg-red-950/80 border-red-500 text-red-400' :
-                                'bg-slate-900/80 border-cyan-500/50 text-cyan-400'
-                            }`}>
-                                {isAnalyzing ? "ANALYZING OPTICS..." : 
-                                toolCheckStatus === 'MATCH' ? "INSTRUMENT VERIFIED" :
-                                toolCheckStatus === 'MISMATCH' ? "CALIBRATION ERROR" : "MACRO OPTICS ENGAGED"}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Error Toast - Floating Material Pill */}
-            {errorMsg && (
-                <div className="absolute top-24 left-1/2 -translate-x-1/2 z-[100] w-auto max-w-md animate-in slide-in-from-top-4 fade-in">
-                    <div className="bg-[#1E1E1E] text-[#E3E3E3] rounded-full px-6 py-3 shadow-2xl border border-white/10 flex items-center gap-4 backdrop-blur-xl">
-                        <AlertCircle className="text-red-400 shrink-0" size={20} />
-                        <span className="text-sm font-medium">{errorMsg}</span>
-                        <button onClick={() => setErrorMsg(null)} className="ml-2 text-slate-500 hover:text-white"><X size={16} /></button>
-                    </div>
-                </div>
-            )}
-            
-            {/* Info Toast - Floating Material Pill */}
-            {infoMsg && !errorMsg && (
-                <div className="absolute top-24 left-1/2 -translate-x-1/2 z-[100] w-auto max-w-md animate-in slide-in-from-top-4 fade-in">
-                    <div className="bg-[#1E1E1E] text-[#E3E3E3] rounded-full px-6 py-3 shadow-2xl border border-white/10 flex items-center gap-4 backdrop-blur-xl">
-                        <Sparkles className="text-cyan-400 shrink-0" size={18} />
-                        <span className="text-sm font-medium">{infoMsg}</span>
-                    </div>
-                </div>
-            )}
-
-            {/* AI Subtitles - Google Assistant Style */}
-            {subtitle && (
-                <div className="absolute bottom-28 left-0 right-0 z-50 flex justify-center pointer-events-none px-6">
-                    <div className="bg-black/60 backdrop-blur-lg text-white px-8 py-4 text-lg font-medium rounded-3xl border border-white/10 shadow-xl max-w-2xl text-center leading-relaxed">
-                        {subtitle}
-                    </div>
-                </div>
-            )}
-
-            {/* Live Transcript - Material Card */}
-            {userTranscript && (
-                <div className="absolute bottom-36 left-8 z-50 pointer-events-none animate-in slide-in-from-bottom-2 fade-in">
-                     <div className="bg-slate-900/60 backdrop-blur-xl rounded-3xl p-5 border border-white/10 max-w-sm shadow-xl">
-                        <div className="flex items-center gap-2.5 mb-2">
-                             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
-                             <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Voice Command</span>
-                        </div>
-                        <p className="text-white text-base leading-relaxed font-medium">"{userTranscript}"</p>
-                     </div>
-                </div>
-            )}
-
-            {/* Privacy Shield Badge */}
-            {isPrivacyMode && (
-                 <div className="absolute top-24 left-8 z-20">
-                     <div className="bg-slate-900/60 backdrop-blur-md border border-white/10 text-white text-xs px-4 py-2 rounded-full flex items-center gap-2.5 shadow-xl">
-                         <ShieldAlert size={14} className="text-green-400" />
-                         <span className="font-bold tracking-wide opacity-90">{privacyEngine === PrivacyMode.SIMULATION ? "IDENTITY SIMULATED" : "FACE REDACTION ACTIVE"}</span>
-                     </div>
-                 </div>
-            )}
-            
-            {/* Ghost Overlay (Golden Frame from YouTube) */}
-            {activeYoutubeUrl && showGoldenFrame && (
-                <div className="absolute inset-0 z-20 pointer-events-none opacity-50 flex items-center justify-center overflow-hidden">
-                    <ReactPlayer
-                        url={activeYoutubeUrl}
-                        width="100%"
-                        height="100%"
-                        playing={false} // Static frame reference
-                        controls={false}
-                        light={false}
-                        ref={(p) => { 
-                            // This is a second player instance just for the ghost overlay
-                            // We need to sync it to the current step timestamp
-                            if (p && sopSteps[currentVideoStepIndex]) {
-                                p.seekTo(sopSteps[currentVideoStepIndex].timestamp || 0, 'seconds');
-                            }
-                        }}
-                        style={{ objectFit: 'cover', transform: 'scale(1.1)' }} // Slight zoom to fill
-                        muted
-                    />
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 border-2 border-amber-500/50 rounded-full animate-ping" />
-                    <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-amber-500/90 text-black px-6 py-2 rounded-full font-bold text-sm shadow-[0_0_30px_rgba(245,158,11,0.6)] animate-pulse flex items-center gap-2">
-                        <ScanEye size={18} /> GHOST MODE ACTIVE
-                    </div>
-                </div>
-            )}
-            
-            {/* Exit Golden Frame Button */}
-            {activeYoutubeUrl && showGoldenFrame && (
-                <div className="absolute bottom-32 left-1/2 -translate-x-1/2 z-50 pointer-events-auto">
-                     <button 
-                        onClick={() => handleStepComplete(sopSteps[currentVideoStepIndex].id)}
-                        className="bg-green-600 hover:bg-green-500 text-white px-8 py-4 rounded-full font-bold text-lg shadow-2xl transition-all border-4 border-black/20 flex items-center gap-3 animate-bounce"
-                     >
-                        <CheckCircle size={24} /> STEP COMPLETE
-                     </button>
-                </div>
-            )}
-
-            <Webcam 
-                ref={webcamRef} 
-                audio={false} 
-                screenshotFormat="image/jpeg" 
-                videoConstraints={{ facingMode: "environment" }} 
-                className={`absolute inset-0 w-full h-full object-cover transition-transform duration-500 ${isMirrored ? 'scale-x-[-1]' : ''} ${isMacroMode ? 'scale-[2] origin-center' : ''}`} 
-            />
-            
-            {ghostImageSrc && <img src={ghostImageSrc} alt="AR Overlay" className="absolute inset-0 w-full h-full object-cover pointer-events-none z-10 mix-blend-screen transition-transform duration-75" style={{ opacity: ghostOpacity / 100, transform: `translate(${ghostPos.x}px, ${ghostPos.y}px) rotate(${ghostRotation}deg)` }} />}
-
-            <canvas ref={canvasRef} className="absolute inset-0 w-full h-full z-20 pointer-events-none" />
-
-            {/* AR Calibration HUD - Floating Glass Panel */}
-            {isCalibrating && ghostImageSrc && (
-                <div className="absolute top-20 right-8 z-40 bg-slate-900/80 backdrop-blur-xl border border-white/10 p-5 rounded-[1.5rem] w-64 shadow-2xl animate-in slide-in-from-right-4">
-                    <div className="flex items-center gap-2 mb-4 border-b border-white/5 pb-3">
-                        <Crosshair size={16} className="text-cyan-400" />
-                        <h3 className="font-bold text-xs text-white uppercase tracking-widest">AR Alignment</h3>
-                    </div>
-                    <div className="space-y-3">
-                        <div className="bg-black/30 rounded-xl p-3 border border-white/5 cursor-help" title="Use Arrow keys to move the overlay. Hold Shift for faster movement.">
-                             <div className="flex justify-between text-[10px] text-slate-400 uppercase mb-1 font-bold">
-                                <span>Position</span> 
-                                <div className="flex items-center gap-1 text-cyan-400 font-mono"><Move size={10} /> <span>ARROWS</span></div>
+                                    </div>
+                                )}
                              </div>
-                             <div className="flex justify-between font-mono text-xs text-slate-200"><span>X: {ghostPos.x}</span> <span>Y: {ghostPos.y}</span></div>
-                        </div>
-                        <div className="bg-black/30 rounded-xl p-3 border border-white/5 cursor-help" title="Use [ and ] keys to rotate the overlay. Hold Shift for faster rotation.">
-                             <div className="flex justify-between text-[10px] text-slate-400 uppercase mb-1 font-bold">
-                                <span>Rotation</span> 
-                                <div className="flex items-center gap-1 text-cyan-400 font-mono">
-                                    <RotateCcw size={10} /> <span>[</span> <span className="mx-0.5 text-slate-600">|</span> <span>]</span> <RotateCw size={10} />
-                                </div>
+
+                             {/* Ghost Mode Toggle */}
+                             <button 
+                                onClick={() => setIsGhostMode(!isGhostMode)}
+                                className={`w-full flex items-center justify-between p-3 rounded-lg border transition-all ${isGhostMode ? 'bg-purple-900/30 border-purple-500/50 text-purple-300' : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-800'}`}
+                             >
+                                 <div className="flex items-center gap-2 font-mono text-xs font-bold">
+                                     <Eye size={16} />
+                                     GHOST MODE (GOLDEN FRAME)
+                                 </div>
+                                 <div className={`w-8 h-4 rounded-full relative transition-colors ${isGhostMode ? 'bg-purple-500' : 'bg-slate-700'}`}>
+                                     <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${isGhostMode ? 'left-4.5 translate-x-1' : 'left-0.5'}`} />
+                                 </div>
+                             </button>
+
+                             {isGhostMode && (
+                                 <div className="p-3 bg-slate-900/50 rounded border border-white/5 text-[10px] text-slate-400 font-mono space-y-1 animate-in fade-in">
+                                     <p className="text-purple-400 font-bold mb-2">AR CALIBRATION ACTIVE</p>
+                                     <div className="flex justify-between"><span>MOVE</span> <span className="text-slate-200">ARROWS</span></div>
+                                     <div className="flex justify-between"><span>ROTATE</span> <span className="text-slate-200">[ ]</span></div>
+                                     <div className="flex justify-between"><span>SCALE</span> <span className="text-slate-200">- +</span></div>
+                                 </div>
+                             )}
+
+                             <div className="space-y-3">
+                                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex justify-between items-center">
+                                     <span>Extracted Steps</span>
+                                     <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-400">
+                                         {currentStepIndex + 1}/{sopSteps.length}
+                                     </span>
+                                 </h3>
+                                 {sopSteps.length === 0 ? (
+                                     <div className="p-4 bg-slate-900/50 rounded-lg border border-white/5 text-center text-slate-500 text-xs">
+                                         Analysis running...
+                                     </div>
+                                 ) : (
+                                     sopSteps.map((step, idx) => (
+                                         <div 
+                                            key={step.id} 
+                                            className={`p-4 border rounded-xl flex gap-3 transition-all ${
+                                                idx === currentStepIndex 
+                                                ? 'bg-cyan-950/20 border-cyan-500/50 shadow-[0_0_20px_rgba(6,182,212,0.1)]' 
+                                                : idx < currentStepIndex
+                                                ? 'bg-slate-900/30 border-white/5 opacity-50'
+                                                : 'bg-slate-800/40 border-white/5'
+                                            }`}
+                                         >
+                                             <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                                                 idx === currentStepIndex 
+                                                 ? 'border-cyan-400 text-cyan-400' 
+                                                 : idx < currentStepIndex
+                                                 ? 'border-green-800 text-green-700'
+                                                 : 'border-slate-600 text-slate-400'
+                                             }`}>
+                                                 {idx < currentStepIndex ? <CheckCircle size={12} /> : step.id}
+                                             </div>
+                                             <div>
+                                                 <p className={`text-sm font-medium ${idx === currentStepIndex ? 'text-white' : 'text-slate-400'}`}>{step.text}</p>
+                                                 <p className="text-[10px] text-slate-500 mt-1">
+                                                     Tools: {step.tools?.join(', ') || 'N/A'} • {step.timestamp}s
+                                                 </p>
+                                             </div>
+                                         </div>
+                                     ))
+                                 )}
                              </div>
-                             <div className="font-mono text-xs text-slate-200">Angle: {ghostRotation.toFixed(1)}°</div>
-                        </div>
-                        <button onClick={() => { setGhostPos({x:0,y:0}); setGhostRotation(0); }} className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold text-white transition-colors border border-white/5" title="Reset overlay to original position and rotation">RESET VIEW</button>
-                    </div>
-                </div>
-            )}
-            
-            {/* Loading Indicator Center - Gemini Spinner */}
-            {(isAnalyzing || preFlightStatus === 'ANALYZING' || isDetectingLang) && !isArmed && (
-                <div className="absolute inset-0 flex items-center justify-center z-40 bg-black/20 backdrop-blur-sm">
-                    <div className="bg-white text-slate-900 pl-5 pr-8 py-4 rounded-full font-bold shadow-2xl flex items-center gap-4 animate-in zoom-in duration-300">
-                         <div className="relative w-6 h-6">
-                             <div className="absolute inset-0 rounded-full border-2 border-blue-500 border-t-transparent animate-spin"></div>
-                             <div className="absolute inset-1 rounded-full border-2 border-purple-500 border-b-transparent animate-spin direction-reverse"></div>
                          </div>
-                        <span className="tracking-tight">{isDetectingLang ? "Fingerprinting Audio..." : "Processing Visuals..."}</span>
-                    </div>
-                </div>
-            )}
-          </div>
-
-          {/* Bottom Control Bar */}
-          <div className="bg-slate-900/30 p-6 flex items-center justify-between gap-4 backdrop-blur-md">
-             <div className="flex items-center gap-6">
-                 {/* Main Action Button - Gemini Gradient */}
-                 {referenceData && preFlightStatus !== 'PASS' && !isArmed ? (
-                     <button onClick={handlePreFlightScan} disabled={preFlightStatus === 'ANALYZING'} className="group flex items-center gap-3 pl-6 pr-8 py-4 rounded-full bg-slate-800 hover:bg-slate-700 text-yellow-400 font-bold text-sm transition-all shadow-lg border border-white/5 hover:border-yellow-500/30 hover:shadow-yellow-500/10">
-                         <Search size={20} className="group-hover:scale-110 transition-transform" />
-                         {preFlightStatus === 'ANALYZING' ? "SCANNING..." : "SCAN WORKBENCH"}
-                     </button>
-                 ) : isMacroMode ? (
-                      <button onClick={handleToolVerification} disabled={isAnalyzing} className="group flex items-center gap-3 pl-6 pr-8 py-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm transition-all shadow-lg shadow-indigo-500/20 hover:shadow-indigo-500/40">
-                         <Target size={20} className="group-hover:rotate-90 transition-transform" />
-                         {isAnalyzing ? "VERIFYING..." : "VERIFY TOOL STATE"}
-                      </button>
-                 ) : (
-                     <button 
-                        onClick={() => setIsArmed(!isArmed)}
-                        data-tour-id="arm-button"
-                        disabled={referenceData && preFlightStatus !== 'PASS' && !isArmed && !activeYoutubeUrl}
-                        className={`group flex items-center gap-3 pl-6 pr-8 py-4 rounded-full font-bold text-sm transition-all shadow-xl hover:shadow-2xl hover:scale-105 active:scale-95 ${
-                            isArmed 
-                            ? 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-cyan-500/20' 
-                            : 'bg-gradient-to-r from-[#4E75F6] via-[#A568CC] to-[#DC606B] text-white'
-                        }`}
-                     >
-                        {isArmed ? <Power size={20} /> : <Scan size={20} className={isArmed ? "" : "animate-pulse"} />}
-                        <span className="tracking-wide">{isArmed ? "DISARM SYSTEM" : "ARM INTELLIGENCE"}</span>
-                     </button>
-                 )}
-                 
-                 <div className="hidden md:flex flex-col border-l border-white/10 pl-6 h-10 justify-center">
-                     <span className="text-[10px] uppercase font-bold text-slate-500 tracking-widest mb-0.5">System Status</span>
-                     <span className={`text-sm font-bold tracking-tight ${result?.status === ComplianceStatus.DRIFT ? 'text-red-400' : 'text-green-400'}`}>
-                         {isArmed ? (result?.status === ComplianceStatus.DRIFT ? "DRIFT DETECTED" : "OPTIMAL ALIGNMENT") : "STANDBY"}
-                     </span>
+                     )}
                  </div>
              </div>
-          </div>
-        </div>
-      </main>
 
-      {/* Telemetry Drawer (Bottom Sheet) - Material 3 Surface w/ Handle */}
-      <div data-tour-id="telemetry-drawer" className={`fixed bottom-0 left-0 right-0 bg-slate-900/90 backdrop-blur-2xl rounded-t-[2rem] border-t border-white/10 transition-all duration-500 cubic-bezier(0.32, 0.72, 0, 1) z-50 shadow-[0_-10px_40px_rgba(0,0,0,0.5)] ${isLogsOpen ? 'h-80' : 'h-16'}`}>
-          <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-700 rounded-full opacity-50" />
-          
-          <div className="flex items-center justify-between px-8 h-16 cursor-pointer hover:bg-white/5 rounded-t-[2rem] transition-colors" onClick={() => setIsLogsOpen(!isLogsOpen)}>
-              
-              {/* Left Side: View Toggles */}
-              <div className="flex items-center gap-4" onClick={(e) => e.stopPropagation()}>
-                  <button 
-                      onClick={() => setTelemetryView('DRIFT')} 
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${telemetryView === 'DRIFT' ? 'bg-slate-700 text-white border-slate-600' : 'text-slate-500 border-transparent hover:text-slate-300'}`}
-                  >
-                    <Activity size={14} />
-                    DRIFT LOGS
-                    <span className="bg-slate-800 px-1.5 rounded text-[10px] text-slate-400 min-w-[1.2rem] text-center">{auditLogs.length}</span>
-                  </button>
+             {/* Main Feed Container */}
+             <div className="relative w-full h-full bg-black flex items-center justify-center overflow-hidden">
+                 {/* 1. Webcam Layer (Background) */}
+                 <Webcam
+                    ref={webcamRef}
+                    audio={false}
+                    screenshotFormat="image/jpeg"
+                    className="absolute inset-0 w-full h-full object-cover opacity-60"
+                 />
 
-                  <div className="w-px h-4 bg-slate-700/50"></div>
+                 {/* 1.5 Ghost Mode Overlay Layer (Golden Frame) */}
+                 {isGhostMode && currentThumbnail && isShiftActive && (
+                     <>
+                        <div className="absolute inset-0 z-0 flex items-center justify-center pointer-events-none overflow-hidden animate-in fade-in duration-700">
+                            <img 
+                                src={currentThumbnail} 
+                                alt="Ghost Reference" 
+                                className="w-full h-full object-cover opacity-50 transition-transform duration-75 ease-out"
+                                style={{
+                                    transform: `translate(${ghostPos.x}px, ${ghostPos.y}px) rotate(${ghostRotate}deg) scale(${ghostScale})`,
+                                    transformOrigin: 'center center'
+                                }}
+                            />
+                        </div>
+                        {/* AR Calibration HUD */}
+                        <div className="absolute bottom-40 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur border border-white/10 rounded-xl p-4 flex items-center gap-6 z-20 pointer-events-none shadow-2xl">
+                            <div className="flex flex-col items-center gap-1">
+                                <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
+                                    <Move size={14} /> POS
+                                </div>
+                                <div className="flex gap-1 text-cyan-400 font-bold font-mono">
+                                    {ghostPos.x.toFixed(0)}, {ghostPos.y.toFixed(0)}
+                                </div>
+                                <div className="flex gap-1 mt-1">
+                                    <div className="px-1.5 py-0.5 bg-slate-800 rounded border border-slate-600 text-[10px] text-slate-300 font-mono shadow-sm flex items-center gap-1">
+                                        <span className="text-xs">←</span>
+                                        <span className="text-xs">↑</span>
+                                        <span className="text-xs">↓</span>
+                                        <span className="text-xs">→</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="w-px h-8 bg-white/10"></div>
+                            <div className="flex flex-col items-center gap-1">
+                                <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
+                                    <RotateCw size={14} /> ROT
+                                </div>
+                                <div className="flex gap-1 text-purple-400 font-bold font-mono">
+                                    {ghostRotate.toFixed(0)}°
+                                </div>
+                                <div className="flex gap-1 mt-1">
+                                    <div className="min-w-[20px] text-center px-1.5 py-0.5 bg-slate-800 rounded border border-slate-600 text-[10px] text-slate-300 font-mono shadow-sm">[</div>
+                                    <div className="min-w-[20px] text-center px-1.5 py-0.5 bg-slate-800 rounded border border-slate-600 text-[10px] text-slate-300 font-mono shadow-sm">]</div>
+                                </div>
+                            </div>
+                            <div className="w-px h-8 bg-white/10"></div>
+                            <div className="flex flex-col items-center gap-1">
+                                <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
+                                    <Maximize size={14} /> SCL
+                                </div>
+                                <div className="flex gap-1 text-green-400 font-bold font-mono">
+                                    {Math.round(ghostScale * 100)}%
+                                </div>
+                                <div className="flex gap-1 mt-1">
+                                    <div className="min-w-[20px] text-center px-1.5 py-0.5 bg-slate-800 rounded border border-slate-600 text-[10px] text-slate-300 font-mono shadow-sm">-</div>
+                                    <div className="min-w-[20px] text-center px-1.5 py-0.5 bg-slate-800 rounded border border-slate-600 text-[10px] text-slate-300 font-mono shadow-sm">+</div>
+                                </div>
+                            </div>
+                            <div className="w-px h-8 bg-white/10"></div>
+                            <div className="flex flex-col items-center gap-2 relative">
+                                {voiceFeedback && (
+                                    <div className="absolute -top-12 left-1/2 -translate-x-1/2 whitespace-nowrap bg-black/90 text-white text-xs px-3 py-1.5 rounded-full border border-white/20 animate-in fade-in slide-in-from-bottom-2">
+                                        {voiceFeedback}
+                                    </div>
+                                )}
+                                <button 
+                                    onClick={toggleVoiceRecording} 
+                                    className={`pointer-events-auto p-3 rounded-full transition-all border ${isRecordingVoice ? 'bg-red-500 text-white border-red-400 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.6)]' : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white hover:border-slate-500'}`}
+                                >
+                                    <Mic size={20} />
+                                </button>
+                                <span className="text-[10px] font-mono text-slate-500 uppercase">Voice</span>
+                            </div>
+                        </div>
+                     </>
+                 )}
+                 
+                 {/* 2. Edge AI HUD Layer (Canvas) */}
+                 <canvas 
+                    ref={canvasRef}
+                    className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                 />
+                 
+                 {/* PPE SENTINEL LOCK SCREEN */}
+                 {!isShiftActive && (
+                     <div className="absolute inset-0 z-40 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-6">
+                         <div className="max-w-md w-full bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-8 text-center space-y-6 animate-in zoom-in-95">
+                             <div className="flex justify-center">
+                                <div className="p-4 bg-slate-800 rounded-full text-slate-400 ring-4 ring-slate-800/50">
+                                    <Shield size={48} />
+                                </div>
+                             </div>
+                             
+                             <div>
+                                 <h2 className="text-2xl font-bold text-white tracking-widest mb-2">PPE SENTINEL ACTIVE</h2>
+                                 <p className="text-slate-400 text-sm">Industrial Compliance Check required to proceed.</p>
+                             </div>
 
-                  <button 
-                      onClick={() => setTelemetryView('TOOL')} 
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${telemetryView === 'TOOL' ? 'bg-indigo-900/40 text-indigo-300 border-indigo-500/30' : 'text-slate-500 border-transparent hover:text-slate-300'}`}
-                  >
-                    <ClipboardList size={14} />
-                    TOOL HISTORY
-                    <span className="bg-slate-800 px-1.5 rounded text-[10px] text-slate-400 min-w-[1.2rem] text-center">{toolHistory.length}</span>
-                  </button>
-              </div>
+                             <div className="bg-black/50 rounded-xl p-4 border border-white/5 space-y-3 text-left">
+                                 {/* Item 1 */}
+                                 <div className="flex items-center gap-3 text-sm">
+                                     {ppeResult ? (
+                                        ppeResult.missing_items.some(i => i.toLowerCase().includes('glass') || i.toLowerCase().includes('eye')) ? 
+                                        <XCircle className="text-red-500" size={18} /> : 
+                                        <CheckCircle className="text-green-500" size={18} />
+                                     ) : (
+                                        <div className="w-4 h-4 rounded-full border-2 border-slate-600" />
+                                     )}
+                                     <span className={ppeResult && ppeResult.missing_items.some(i => i.toLowerCase().includes('glass') || i.toLowerCase().includes('eye')) ? "text-red-200" : "text-slate-300"}>
+                                         Safety Glasses / Eye Protection
+                                     </span>
+                                 </div>
 
-              {/* Right Side: Actions */}
-              <div className="flex items-center gap-3 md:gap-4">
-                  <button onClick={(e) => { e.stopPropagation(); handleGoogleExport('DOCS'); }} className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold text-blue-400 hover:bg-blue-900/30 transition-colors border border-transparent hover:border-blue-500/30 bg-blue-950/10">
-                      <FileDoc size={14} /> <span className="hidden lg:inline">EXPORT</span> DOCS
-                  </button>
-                  <button onClick={(e) => { e.stopPropagation(); handleGoogleExport('SHEETS'); }} className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold text-green-400 hover:bg-green-900/30 transition-colors border border-transparent hover:border-green-500/30 bg-green-950/10">
-                      <Table size={14} /> <span className="hidden lg:inline">SYNC</span> SHEETS
-                  </button>
-                  <button onClick={(e) => { e.stopPropagation(); exportLogs(); }} className="text-xs text-slate-400 hover:text-white font-bold flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-white/10 transition-colors"><Download size={14} /> JSON</button>
-                  {isLogsOpen ? <ChevronDown size={20} className="text-slate-500" /> : <ChevronUp size={20} className="text-slate-500" />}
-              </div>
-          </div>
+                                 {/* Item 2 */}
+                                 <div className="flex items-center gap-3 text-sm">
+                                      {ppeResult ? (
+                                        ppeResult.missing_items.some(i => i.toLowerCase().includes('vest') || i.toLowerCase().includes('uniform') || i.toLowerCase().includes('coat')) ? 
+                                        <XCircle className="text-red-500" size={18} /> : 
+                                        <CheckCircle className="text-green-500" size={18} />
+                                     ) : (
+                                        <div className="w-4 h-4 rounded-full border-2 border-slate-600" />
+                                     )}
+                                     <span className={ppeResult && ppeResult.missing_items.some(i => i.toLowerCase().includes('vest') || i.toLowerCase().includes('uniform') || i.toLowerCase().includes('coat')) ? "text-red-200" : "text-slate-300"}>
+                                         High-Visibility Vest / Uniform
+                                     </span>
+                                 </div>
+                             </div>
 
-          <div className="h-full overflow-y-auto p-8 pb-24 font-mono text-xs space-y-3">
-              {telemetryView === 'DRIFT' ? (
-                  auditLogs.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center h-48 text-slate-600 space-y-4">
-                          <div className="p-4 rounded-full bg-slate-800/50">
-                            <MessageSquare size={32} className="opacity-40" />
-                          </div>
-                          <p className="font-sans font-medium text-slate-500">No drift events recorded in current session.</p>
-                      </div>
-                  ) : (
-                      auditLogs.map(log => (
-                          <div key={log.id} className="group flex gap-6 p-4 hover:bg-white/5 rounded-2xl transition-all border border-transparent hover:border-white/5 items-center">
-                              <span className="text-slate-500 shrink-0 font-medium">{log.timestamp}</span>
-                              <span className={`px-3 py-1 rounded-full font-bold shrink-0 text-[10px] tracking-wider w-24 text-center ${log.severity === DriftSeverity.CRITICAL ? 'bg-red-900/30 text-red-300 border border-red-500/20' : log.severity === DriftSeverity.MEDIUM ? 'bg-orange-900/30 text-orange-300 border border-orange-500/20' : 'bg-yellow-900/30 text-yellow-300 border border-yellow-500/20'}`}>{log.severity}</span>
-                              <span className="text-slate-300 font-sans text-sm group-hover:text-white transition-colors">{log.reasoning}</span>
-                          </div>
-                      ))
-                  )
-              ) : (
-                  toolHistory.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center h-48 text-slate-600 space-y-4">
-                          <div className="p-4 rounded-full bg-slate-800/50">
-                            <Microscope size={32} className="opacity-40" />
-                          </div>
-                          <p className="font-sans font-medium text-slate-500">No instrument verifications performed.</p>
-                      </div>
-                  ) : (
-                      toolHistory.map(log => (
-                          <div key={log.id} className="group flex gap-6 p-4 hover:bg-slate-800/50 rounded-2xl transition-all border border-transparent hover:border-white/5 items-center">
-                              <span className="text-slate-500 shrink-0 font-medium font-mono">{log.timestamp}</span>
-                              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full font-bold shrink-0 text-[10px] tracking-wider w-32 justify-center border shadow-sm ${log.status === 'MATCH' ? 'bg-green-950/40 text-green-400 border-green-500/30 shadow-green-900/10' : 'bg-red-950/40 text-red-400 border-red-500/30 shadow-red-900/10'}`}>
-                                  {log.status === 'MATCH' ? <CheckCircle size={12} strokeWidth={3} /> : <AlertTriangle size={12} strokeWidth={3} />}
-                                  {log.status}
-                              </div>
-                              <span className="text-slate-300 font-sans text-sm font-medium group-hover:text-white transition-colors flex-1">{log.instruction}</span>
-                          </div>
-                      ))
-                  )
-              )}
+                             {ppeResult && !ppeResult.compliant && (
+                                 <div className="p-3 bg-red-950/50 border border-red-500/30 rounded-lg text-red-200 text-sm font-bold flex items-center gap-2 justify-center animate-in slide-in-from-bottom-2">
+                                     <AlertTriangle size={16} />
+                                     {ppeResult.message}
+                                 </div>
+                             )}
+
+                             <button 
+                                onClick={handlePPEScan}
+                                disabled={isScanningPPE}
+                                className="w-full py-4 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl shadow-lg hover:shadow-cyan-500/25 transition-all flex items-center justify-center gap-2"
+                             >
+                                {isScanningPPE ? <Activity className="animate-spin" /> : <Scan />}
+                                {isScanningPPE ? "SCANNING BIOMETRICS..." : "VERIFY COMPLIANCE & UNLOCK"}
+                             </button>
+                         </div>
+                     </div>
+                 )}
+
+                 {/* 4. Cognitive Analysis Result Overlay */}
+                 {lastResult && isShiftActive && (
+                     <div className="absolute top-24 left-10 p-4 bg-black/60 backdrop-blur border border-white/10 rounded-xl max-w-sm pointer-events-none z-10 animate-in zoom-in-95">
+                         <div className="flex items-center gap-2 mb-2">
+                             <BrainCircuit size={16} className={lastResult.status === 'MATCH' ? 'text-green-400' : 'text-red-400'} />
+                             <span className="text-[10px] font-mono uppercase tracking-widest text-slate-400">COGNITIVE INFERENCE</span>
+                         </div>
+                         <div className={`text-2xl font-bold mb-2 ${lastResult.status === 'MATCH' ? 'text-green-400' : 'text-red-400'}`}>
+                             {lastResult.status}
+                         </div>
+                         <p className="text-sm text-slate-200 leading-relaxed font-medium">{lastResult.correction_voice}</p>
+                     </div>
+                 )}
+                 
+                 {/* 5. Main Action Button */}
+                 {isShiftActive && (
+                     <button 
+                        onClick={runAnalysis}
+                        disabled={isAnalyzing}
+                        className={`absolute bottom-24 md:bottom-32 z-30 px-8 py-4 bg-cyan-500 hover:bg-cyan-400 text-black font-bold rounded-full shadow-[0_0_40px_rgba(6,182,212,0.5)] transition-all flex items-center gap-3 ${isSopOpen ? 'md:translate-x-32' : ''}`}
+                     >
+                        {isAnalyzing ? <Activity className="animate-spin" /> : <Camera />}
+                        {isAnalyzing ? "REASONING..." : "TRIGGER COGNITIVE INFERENCE"}
+                     </button>
+                 )}
+             </div>
           </div>
       </div>
+
+      {/* Telemetry Drawer */}
+      {isShiftActive && (
+        <div data-tour-id="telemetry-drawer" className={`fixed bottom-0 left-0 right-0 bg-slate-900/90 backdrop-blur-2xl rounded-t-[2rem] border-t border-white/10 transition-all duration-500 cubic-bezier(0.32, 0.72, 0, 1) z-50 shadow-[0_-10px_40px_rgba(0,0,0,0.5)] ${isLogsOpen ? 'h-80' : 'h-20'}`}>
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-700 rounded-full opacity-50" />
+            
+            <div className="flex items-center justify-between px-6 lg:px-8 h-20 cursor-pointer hover:bg-white/5 rounded-t-[2rem] transition-colors" onClick={() => setIsLogsOpen(!isLogsOpen)}>
+                <div className="flex items-center gap-4 lg:gap-8" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-lg transition-colors ${isLogsOpen ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-800 text-slate-500'}`}>
+                            <Network size={20} />
+                        </div>
+                        <h3 className="text-sm font-bold text-slate-200 uppercase tracking-widest hidden sm:block">Async Telemetry</h3>
+                    </div>
+                    <div className="h-8 w-px bg-white/10 hidden sm:block"></div>
+                    <div className="flex items-center gap-2">
+                        <button 
+                            onClick={() => setTelemetryView('DRIFT')} 
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${telemetryView === 'DRIFT' ? 'bg-slate-700 text-white border-slate-600' : 'text-slate-500 border-transparent hover:text-slate-300'}`}
+                        >
+                            <Activity size={14} />
+                            DRIFT EVENTS
+                            <span className="bg-slate-800 px-1.5 rounded text-[10px] text-slate-400 min-w-[1.2rem] text-center">{auditLogs.length}</span>
+                        </button>
+                        <button 
+                            onClick={() => setTelemetryView('TOOL')} 
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${telemetryView === 'TOOL' ? 'bg-indigo-900/40 text-indigo-300 border-indigo-500/30' : 'text-slate-500 border-transparent hover:text-slate-300'}`}
+                        >
+                            <ClipboardList size={14} />
+                            VERIFICATIONS
+                            <span className="bg-slate-800 px-1.5 rounded text-[10px] text-slate-400 min-w-[1.2rem] text-center">{toolHistory.length}</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                    <button onClick={(e) => { e.stopPropagation(); exportLogs(); }} className="text-xs text-slate-400 hover:text-white font-bold flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-white/10 transition-colors border border-white/5">
+                        <Download size={14} /> <span className="hidden md:inline">JSON DUMP</span><span className="md:hidden">JSON</span>
+                    </button>
+                    <div className="w-px h-8 bg-white/10 mx-2 hidden sm:block"></div>
+                    {isLogsOpen ? <ChevronDown size={20} className="text-slate-500" /> : <ChevronUp size={20} className="text-slate-500" />}
+                </div>
+            </div>
+
+            <div className="h-full overflow-y-auto p-6 lg:p-8 pb-32 font-mono text-xs space-y-3">
+                {telemetryView === 'DRIFT' ? (
+                    auditLogs.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-32 text-slate-600 space-y-4">
+                            <div className="p-4 rounded-full bg-slate-800/50">
+                                <MessageSquare size={24} className="opacity-40" />
+                            </div>
+                            <p className="font-sans font-medium text-slate-500">No drift events recorded in current session.</p>
+                        </div>
+                    ) : (
+                        auditLogs.map(log => (
+                            <div key={log.id} className="group flex flex-col md:flex-row gap-2 md:gap-6 p-4 hover:bg-white/5 rounded-2xl transition-all border border-transparent hover:border-white/5 items-start md:items-center">
+                                <span className="text-slate-500 shrink-0 font-medium w-24">{log.timestamp}</span>
+                                <span className={`px-3 py-1 rounded-full font-bold shrink-0 text-[10px] tracking-wider w-24 text-center ${log.severity === DriftSeverity.CRITICAL ? 'bg-red-900/30 text-red-300 border border-red-500/20' : log.severity === DriftSeverity.MEDIUM ? 'bg-orange-900/30 text-orange-300 border border-orange-500/20' : 'bg-yellow-900/30 text-yellow-300 border border-yellow-500/20'}`}>{log.severity}</span>
+                                <span className="text-slate-300 font-sans text-sm group-hover:text-white transition-colors flex-1">{log.reasoning}</span>
+                                {log.reportUrl && (
+                                    <a href={log.reportUrl} download={`incident_${log.id}.pdf`} className="shrink-0 flex items-center gap-2 px-4 py-2 bg-red-900/20 text-red-400 hover:bg-red-900/40 rounded-lg border border-red-500/30 transition-all font-bold" onClick={(e) => e.stopPropagation()}>
+                                        <FileText size={14} /> PDF REPORT
+                                    </a>
+                                )}
+                            </div>
+                        ))
+                    )
+                ) : (
+                    toolHistory.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-32 text-slate-600 space-y-4">
+                            <div className="p-4 rounded-full bg-slate-800/50">
+                                <Microscope size={24} className="opacity-40" />
+                            </div>
+                            <p className="font-sans font-medium text-slate-500">No instrument verifications performed.</p>
+                        </div>
+                    ) : (
+                        toolHistory.map(log => (
+                            <div key={log.id} className="group flex flex-col md:flex-row gap-2 md:gap-6 p-4 hover:bg-slate-800/50 rounded-2xl transition-all border border-transparent hover:border-white/5 items-start md:items-center">
+                                <span className="text-slate-500 shrink-0 font-medium font-mono w-24">{log.timestamp}</span>
+                                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full font-bold shrink-0 text-[10px] tracking-wider w-32 justify-center border shadow-sm ${log.status === 'MATCH' ? 'bg-green-950/40 text-green-400 border-green-500/30 shadow-green-900/10' : 'bg-red-950/40 text-red-400 border-red-500/30 shadow-red-900/10'}`}>
+                                    {log.status === 'MATCH' ? <CheckCircle size={12} strokeWidth={3} /> : <AlertTriangle size={12} strokeWidth={3} />}
+                                    {log.status}
+                                </div>
+                                <span className="text-slate-300 font-sans text-sm font-medium group-hover:text-white transition-colors flex-1">{log.instruction}</span>
+                            </div>
+                        ))
+                    )
+                )}
+            </div>
+        </div>
+      )}
     </div>
   );
 };

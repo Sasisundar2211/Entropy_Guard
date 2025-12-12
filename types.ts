@@ -17,11 +17,23 @@ export enum PrivacyMode {
 
 export type Language = 'auto' | 'en' | 'es' | 'de' | 'hi' | 'zh' | 'fr' | 'ja';
 
+export type ARVoiceCommand = 
+  | 'MOVE_LEFT' | 'MOVE_RIGHT' | 'MOVE_UP' | 'MOVE_DOWN' 
+  | 'ROTATE_CW' | 'ROTATE_CCW' 
+  | 'SCALE_UP' | 'SCALE_DOWN' 
+  | 'RESET' | 'UNKNOWN';
+
 export interface BoxCoordinates {
   x: number;
   y: number;
   width: number;
   height: number;
+}
+
+export interface PPEResponse {
+  compliant: boolean;
+  missing_items: string[];
+  message: string;
 }
 
 export interface ComplianceResponse {
@@ -41,6 +53,7 @@ export interface AuditLogEntry {
   timestamp: string;
   severity: DriftSeverity;
   reasoning: string;
+  reportUrl?: string; // Link to PDF
 }
 
 export interface ToolVerificationLogEntry {

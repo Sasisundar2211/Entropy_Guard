@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type, SchemaParams } from "@google/genai";
-import { ComplianceResponse, ComplianceStatus, DriftSeverity, SOPStep, PreFlightResult, Language, TranslationOverlay, ToolVerificationResult, HazardZone, MasterSOPStep } from "../types";
+import { jsPDF } from "jspdf";
+import { ComplianceResponse, ComplianceStatus, DriftSeverity, SOPStep, PreFlightResult, Language, TranslationOverlay, ToolVerificationResult, HazardZone, MasterSOPStep, PPEResponse, AuditLogEntry, ARVoiceCommand } from "../types";
 
 // Mock response for when no API key is provided or for testing
 const MOCK_RESPONSE_DRIFT: ComplianceResponse = {
@@ -14,6 +15,92 @@ const MOCK_RESPONSE_MATCH: ComplianceResponse = {
   drift_severity: DriftSeverity.LOW,
   coordinates: [100, 100, 800, 800], // Full frame safe
   correction_voice: "System Stable. Entropy within nominal limits."
+};
+
+export const checkPPE = async (apiKey: string, imageBase64: string): Promise<PPEResponse> => {
+    if (!apiKey) {
+        await new Promise(r => setTimeout(r, 1500));
+        return { compliant: false, missing_items: ["Safety Glasses"], message: "ACCESS DENIED. Missing Safety Glasses." };
+    }
+
+    try {
+        const ai = new GoogleGenAI({ apiKey });
+        const cleanFrame = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+
+        const response = await ai.models.generateContent({
+            model: "gemini-3-pro-preview",
+            contents: {
+                parts: [
+                    { text: "ACT AS: OSHA Safety Inspector. \nTASK: Analyze this image of a worker. \nCHECKLIST: \n1. Safety Glasses / Eye Protection? \n2. High-Visibility Vest or Lab Coat or Safety Uniform? \n\nOUTPUT JSON: { \"compliant\": bool, \"missing_items\": [\"item1\", \"item2\"], \"message\": \"Short status message\" }" },
+                    { inlineData: { mimeType: "image/jpeg", data: cleanFrame } }
+                ]
+            },
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        compliant: { type: Type.BOOLEAN },
+                        missing_items: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        message: { type: Type.STRING }
+                    },
+                    required: ["compliant", "missing_items", "message"]
+                }
+            }
+        });
+
+        if (response.text) return JSON.parse(response.text);
+        throw new Error("PPE Check Failed");
+    } catch (e) {
+        console.error("PPE Check Error", e);
+        return { compliant: false, missing_items: ["AI Error"], message: "Compliance service unavailable." };
+    }
+};
+
+export const generateIncidentReport = (logEntry: AuditLogEntry, screenshotBase64: string): string => {
+    // Generates a PDF and returns the Blob URL
+    try {
+        const doc = new jsPDF();
+        const date = new Date().toLocaleString();
+
+        // Header
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(22);
+        doc.setTextColor(220, 38, 38); // Red
+        doc.text("ENTROPYGUARD // INCIDENT REPORT", 10, 20);
+
+        doc.setFontSize(12);
+        doc.setTextColor(0, 0, 0);
+        doc.setFont("courier", "normal");
+        doc.text(`REPORT ID: ${logEntry.id}`, 10, 35);
+        doc.text(`TIMESTAMP: ${date}`, 10, 42);
+        doc.text(`SEVERITY: ${logEntry.severity}`, 10, 49);
+
+        // Evidence Image
+        if (screenshotBase64) {
+            doc.addImage(screenshotBase64, "JPEG", 10, 60, 100, 75); // x, y, w, h
+        }
+
+        // Analysis
+        doc.setFont("helvetica", "bold");
+        doc.text("AI FORENSIC ANALYSIS:", 10, 150);
+        
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(11);
+        const splitText = doc.splitTextToSize(logEntry.reasoning, 180);
+        doc.text(splitText, 10, 160);
+
+        // Footer
+        doc.setFontSize(10);
+        doc.setTextColor(100);
+        doc.text("Generated automatically by EntropyGuard Neural Safety Core.", 10, 280);
+
+        const blob = doc.output("blob");
+        return URL.createObjectURL(blob);
+    } catch (e) {
+        console.error("PDF Generation Failed", e);
+        return "#";
+    }
 };
 
 export const generateSchematic = async (apiKey: string): Promise<string> => {
@@ -79,7 +166,7 @@ export const digitizeSOP = async (apiKey: string, referenceBase64: string): Prom
         }
 
         const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: "gemini-3-pro-preview",
             contents: { parts },
             config: {
                 responseMimeType: "application/json",
@@ -140,7 +227,7 @@ export const processYoutubeVideo = async (apiKey: string, url: string): Promise<
         const ai = new GoogleGenAI({ apiKey });
         // Generate steps based on the context of the title
         const response = await ai.models.generateContent({
-             model: "gemini-2.5-flash", 
+             model: "gemini-3-pro-preview", 
              contents: {
                  parts: [{ text: `Context: An industrial training video titled "${title}". 
                  Task: Break this procedure down into discrete, logical 'Action Steps'. 
@@ -220,7 +307,7 @@ export const performPreFlightCheck = async (
         }
 
         const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: "gemini-3-pro-preview",
             contents: { parts },
             config: {
                 responseMimeType: "application/json",
@@ -262,7 +349,7 @@ export const verifyToolState = async (apiKey: string, imageBase64: string, requi
         const cleanFrame = imageBase64.replace(/^data:image\/\w+;base64,/, "");
 
         const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: "gemini-3-pro-preview",
             contents: {
                 parts: [
                     { text: `TASK: Instrument Verifier. \nREQUIREMENT: ${requirement} \nAnalyze the image (zoomed in on tool). Read dials, switches, and screens. \nIf the tool state matches the requirement, return MATCH. \nIf not, return MISMATCH and precise instructions to fix it.` },
@@ -325,6 +412,40 @@ export const detectLanguageFromAudio = async (apiKey: string, audioBase64: strin
     } catch (e) {
         console.error("Language Detection Failed", e);
         return { code: 'en', name: "English (Fallback)" };
+    }
+};
+
+export const parseARVoiceCommand = async (apiKey: string, audioBase64: string): Promise<ARVoiceCommand> => {
+    if (!apiKey) {
+        await new Promise(r => setTimeout(r, 1000));
+        return 'MOVE_LEFT'; // Simulated result
+    }
+
+    try {
+        const ai = new GoogleGenAI({ apiKey });
+        const cleanAudio = audioBase64.replace(/^data:audio\/\w+;base64,/, "");
+
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: {
+                parts: [
+                    { text: "Listen to the audio command for an AR interface. Map it to one of these enums: MOVE_LEFT, MOVE_RIGHT, MOVE_UP, MOVE_DOWN, ROTATE_CW, ROTATE_CCW, SCALE_UP, SCALE_DOWN, RESET. If unclear, return UNKNOWN. Return only the enum string." },
+                    { inlineData: { mimeType: "audio/webm", data: cleanAudio } }
+                ]
+            },
+            config: {
+                responseMimeType: "text/plain",
+            }
+        });
+        
+        const cmd = response.text?.trim() as ARVoiceCommand;
+        if (['MOVE_LEFT','MOVE_RIGHT','MOVE_UP','MOVE_DOWN','ROTATE_CW','ROTATE_CCW','SCALE_UP','SCALE_DOWN','RESET'].includes(cmd)) {
+            return cmd;
+        }
+        return 'UNKNOWN';
+    } catch (e) {
+        console.error("Voice Command Failed", e);
+        return 'UNKNOWN';
     }
 };
 
@@ -463,7 +584,7 @@ export const analyzeCompliance = async (
     };
 
     const result = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3-pro-preview",
         contents: {
             parts: parts
         },
@@ -510,7 +631,7 @@ export const generateSOPFromFrames = async (apiKey: string, frames: string[]): P
         });
 
         const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: "gemini-3-pro-preview",
             contents: { parts },
             config: {
                 responseMimeType: "application/json",
