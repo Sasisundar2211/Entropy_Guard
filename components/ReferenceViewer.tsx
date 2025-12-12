@@ -1,3 +1,4 @@
+
 import React, { useRef, useState } from 'react';
 import { Upload, Camera, Link as LinkIcon, X, FileText, Youtube, Trash2, Loader2, AlertCircle } from 'lucide-react';
 import { ReferenceData } from '../types';
@@ -34,8 +35,8 @@ export const ReferenceViewer: React.FC<Props> = ({
     if (!ytInput) return;
     const id = extractYoutubeId(ytInput);
     if (id) {
-        // We pass the full embed URL to the parent for consistency with existing types
-        onYoutubeSubmit(`https://www.youtube.com/embed/${id}`);
+        // Construct embed URL for iframe
+        onYoutubeSubmit(`https://www.youtube.com/embed/${id}?autoplay=1&rel=0`);
         setYtInput("");
         setError(null);
     } else {
@@ -68,7 +69,7 @@ export const ReferenceViewer: React.FC<Props> = ({
             </div>
 
             {/* Viewer Content */}
-            <div className="flex-1 bg-black/50 relative overflow-hidden">
+            <div className="flex-1 bg-black/50 relative overflow-hidden flex items-center justify-center">
                 {referenceData.type === 'PDF' && (
                      <embed 
                         src={referenceData.content} 

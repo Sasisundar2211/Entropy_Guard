@@ -4,7 +4,8 @@ import {
   Scan, Upload, FileText, 
   AlertOctagon, CheckCircle2, Activity, Play, Square,
   Settings, AlertTriangle, ShieldCheck, RotateCcw, Youtube, PauseCircle, Globe, Move,
-  Mic, MicOff, ListTodo, Download, Search, X, Loader2
+  Mic, MicOff, ListTodo, Download, Search, X, Loader2,
+  Video, VideoOff, EyeOff
 } from 'lucide-react';
 import { SettingsModal } from './components/SettingsModal';
 import { LandingScreen } from './components/LandingScreen';
@@ -68,6 +69,7 @@ const App: React.FC = () => {
   // Advanced Features
   const [isPaused, setIsPaused] = useState(false);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const [isCameraActive, setIsCameraActive] = useState(true);
   
   // Ingestion State
   const [youtubeLoading, setYoutubeLoading] = useState(false);
@@ -249,7 +251,8 @@ const App: React.FC = () => {
   };
 
   const captureFrame = useCallback(async () => {
-    if (!webcamRef.current || !referenceData || isPaused) return;
+    // Stop check if camera is off
+    if (!isCameraActive || !webcamRef.current || !referenceData || isPaused) return;
     
     const imageSrc = webcamRef.current.getScreenshot();
     if (!imageSrc) return;
@@ -265,7 +268,7 @@ const App: React.FC = () => {
     } catch(e) {
         // Silent fail on frame capture errors to avoid spamming logs
     }
-  }, [apiKey, referenceData, isPaused]);
+  }, [apiKey, referenceData, isPaused, isCameraActive]);
 
   useEffect(() => {
     if (appState === AppState.MONITORING) {
@@ -378,77 +381,108 @@ const App: React.FC = () => {
                         <Activity size={18} className="text-[#A8C7FA]" /> Live Analysis
                     </span>
                     
-                    {/* Calibration Controls */}
-                    <div className="hidden md:flex items-center gap-4">
-                        <div className="flex items-center gap-3 bg-[#111318]/60 px-3 py-1 rounded-lg border border-[#444746]/50">
-                            <div className="flex items-center gap-2" title="Use Arrow Keys">
-                                <Move size={12} className="text-[#8E918F]" />
-                                <span className="text-[10px] font-mono text-[#C4C7C5] w-12 text-right">{calibration.x},{calibration.y}</span>
+                    <div className="flex items-center gap-3">
+                        {/* Camera Toggle */}
+                        <button
+                            onClick={() => {
+                                const nextState = !isCameraActive;
+                                setIsCameraActive(nextState);
+                                addLog(`Camera sensor ${nextState ? 'activated' : 'deactivated'} manually.`, nextState ? 'SUCCESS' : 'WARNING');
+                            }}
+                            className={`p-1.5 rounded-lg transition-colors border ${
+                                isCameraActive 
+                                ? 'bg-[#1E2229] border-[#444746] text-[#C4C7C5] hover:text-white hover:bg-[#2B2F36]' 
+                                : 'bg-[#1E1B16] border-[#FFB4AB]/20 text-[#FFB4AB]'
+                            }`}
+                            title={isCameraActive ? "Disable Camera Feed" : "Enable Camera Feed"}
+                        >
+                            {isCameraActive ? <Video size={16} /> : <VideoOff size={16} />}
+                        </button>
+
+                        {/* Calibration Controls */}
+                        <div className="hidden md:flex items-center gap-4">
+                            <div className="flex items-center gap-3 bg-[#111318]/60 px-3 py-1 rounded-lg border border-[#444746]/50">
+                                <div className="flex items-center gap-2" title="Use Arrow Keys">
+                                    <Move size={12} className="text-[#8E918F]" />
+                                    <span className="text-[10px] font-mono text-[#C4C7C5] w-12 text-right">{calibration.x},{calibration.y}</span>
+                                </div>
+                                <div className="w-px h-3 bg-[#444746]" />
+                                <div className="flex items-center gap-2" title="Use [ and ]">
+                                    <span className="text-[10px] font-mono text-[#C4C7C5] w-6 text-right">{calibration.r}°</span>
+                                </div>
+                                {(calibration.x !== 0 || calibration.y !== 0 || calibration.r !== 0) && (
+                                    <button onClick={() => setCalibration({x:0, y:0, r:0})} className="ml-1 text-[#A8C7FA] hover:text-white"><RotateCcw size={12} /></button>
+                                )}
                             </div>
-                            <div className="w-px h-3 bg-[#444746]" />
-                            <div className="flex items-center gap-2" title="Use [ and ]">
-                                <span className="text-[10px] font-mono text-[#C4C7C5] w-6 text-right">{calibration.r}°</span>
-                            </div>
-                            {(calibration.x !== 0 || calibration.y !== 0 || calibration.r !== 0) && (
-                                <button onClick={() => setCalibration({x:0, y:0, r:0})} className="ml-1 text-[#A8C7FA] hover:text-white"><RotateCcw size={12} /></button>
-                            )}
                         </div>
                     </div>
                 </div>
 
                 <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
-                    <Webcam 
-                        ref={webcamRef}
-                        audio={false}
-                        className="absolute inset-0 w-full h-full object-cover opacity-90"
-                        screenshotFormat="image/jpeg"
-                    />
-                    
-                    {/* CONFIDENCE BAR OVERLAY */}
-                    {appState === AppState.MONITORING && (
-                        <div className="absolute top-4 left-4 right-4 flex gap-2">
-                            <div className="flex-1 h-1.5 bg-black/50 rounded-full overflow-hidden backdrop-blur">
-                                <div 
-                                    className="h-full transition-all duration-500 ease-out"
-                                    style={{ 
-                                        width: `${analysisResult?.confidence || 100}%`,
-                                        backgroundColor: (analysisResult?.confidence || 100) > 80 ? '#6DD58C' : '#FFB4AB'
-                                    }}
-                                />
-                            </div>
-                            <span className="text-[10px] font-bold text-white shadow-black drop-shadow-md">
-                                {analysisResult?.confidence || 100}% TRUST
-                            </span>
-                        </div>
-                    )}
+                    {isCameraActive ? (
+                        <>
+                            <Webcam 
+                                ref={webcamRef}
+                                audio={false}
+                                className="absolute inset-0 w-full h-full object-cover opacity-90"
+                                screenshotFormat="image/jpeg"
+                            />
+                            
+                            {/* CONFIDENCE BAR OVERLAY */}
+                            {appState === AppState.MONITORING && (
+                                <div className="absolute top-4 left-4 right-4 flex gap-2">
+                                    <div className="flex-1 h-1.5 bg-black/50 rounded-full overflow-hidden backdrop-blur">
+                                        <div 
+                                            className="h-full transition-all duration-500 ease-out"
+                                            style={{ 
+                                                width: `${analysisResult?.confidence || 100}%`,
+                                                backgroundColor: (analysisResult?.confidence || 100) > 80 ? '#6DD58C' : '#FFB4AB'
+                                            }}
+                                        />
+                                    </div>
+                                    <span className="text-[10px] font-bold text-white shadow-black drop-shadow-md">
+                                        {analysisResult?.confidence || 100}% TRUST
+                                    </span>
+                                </div>
+                            )}
 
-                    {/* AR Overlays */}
-                    <div 
-                        className="absolute inset-0 pointer-events-none overflow-hidden" 
-                        style={{ 
-                            transform: `translate(${calibration.x}px, ${calibration.y}px) rotate(${calibration.r}deg)`, 
-                            transformOrigin: 'center' 
-                        }}
-                    >
-                        {analysisResult?.boundingBox && analysisResult.status === ComplianceStatus.DRIFT && (
-                             <div 
-                                className="absolute border-[3px] border-[#FFB4AB] bg-[#93000A]/30 rounded-lg flex items-start justify-center animate-pulse"
-                                style={{
-                                    top: `${analysisResult.boundingBox[0]/10}%`, left: `${analysisResult.boundingBox[1]/10}%`,
-                                    height: `${(analysisResult.boundingBox[2]-analysisResult.boundingBox[0])/10}%`, width: `${(analysisResult.boundingBox[3]-analysisResult.boundingBox[1])/10}%`
+                            {/* AR Overlays */}
+                            <div 
+                                className="absolute inset-0 pointer-events-none overflow-hidden" 
+                                style={{ 
+                                    transform: `translate(${calibration.x}px, ${calibration.y}px) rotate(${calibration.r}deg)`, 
+                                    transformOrigin: 'center' 
                                 }}
                             >
-                                <span className="bg-[#FFB4AB] text-[#690005] text-xs font-bold px-2 py-0.5 rounded-b shadow-md">
-                                    DRIFT DETECTED
-                                </span>
+                                {analysisResult?.boundingBox && analysisResult.status === ComplianceStatus.DRIFT && (
+                                     <div 
+                                        className="absolute border-[3px] border-[#FFB4AB] bg-[#93000A]/30 rounded-lg flex items-start justify-center animate-pulse"
+                                        style={{
+                                            top: `${analysisResult.boundingBox[0]/10}%`, left: `${analysisResult.boundingBox[1]/10}%`,
+                                            height: `${(analysisResult.boundingBox[2]-analysisResult.boundingBox[0])/10}%`, width: `${(analysisResult.boundingBox[3]-analysisResult.boundingBox[1])/10}%`
+                                        }}
+                                    >
+                                        <span className="bg-[#FFB4AB] text-[#690005] text-xs font-bold px-2 py-0.5 rounded-b shadow-md">
+                                            DRIFT DETECTED
+                                        </span>
+                                    </div>
+                                )}
                             </div>
-                        )}
-                    </div>
 
-                     {/* Voice Active Indicator */}
-                     {appState === AppState.MONITORING && isVoiceActive && (
-                        <div className="absolute top-4 right-4 bg-black/40 backdrop-blur rounded-full p-2 border border-white/10 animate-pulse">
-                            <Mic size={16} className="text-[#FFB4AB]" />
+                             {/* Voice Active Indicator */}
+                             {appState === AppState.MONITORING && isVoiceActive && (
+                                <div className="absolute top-4 right-4 bg-black/40 backdrop-blur rounded-full p-2 border border-white/10 animate-pulse">
+                                    <Mic size={16} className="text-[#FFB4AB]" />
+                                </div>
+                            )}
+                        </>
+                    ) : (
+                        <div className="absolute inset-0 bg-[#0B0D10] flex flex-col items-center justify-center text-[#444746] animate-in fade-in duration-300">
+                             <div className="w-16 h-16 rounded-full bg-[#1E2229] border border-[#2B2F36] flex items-center justify-center mb-4 shadow-inner">
+                                <EyeOff size={28} />
+                             </div>
+                             <span className="font-mono text-xs tracking-[0.2em] font-bold">SENSOR OFFLINE</span>
+                             <p className="text-[10px] text-[#8E918F] mt-2 uppercase tracking-wide">Analysis Suspended</p>
                         </div>
                     )}
                 </div>
@@ -457,7 +491,7 @@ const App: React.FC = () => {
                 <div className="bg-[#1E2229] border-t border-[#2B2F36] p-4">
                     <div className="flex items-center justify-between gap-4">
                         <div className="flex-1 flex items-center">
-                            {analysisResult ? (
+                            {analysisResult && isCameraActive ? (
                                 <div className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium w-full animate-in slide-in-from-bottom-2 ${
                                     analysisResult.status === ComplianceStatus.DRIFT 
                                     ? 'bg-[#93000A] text-[#FFDAD6] border border-[#FFB4AB]/30' 
@@ -468,8 +502,8 @@ const App: React.FC = () => {
                                 </div>
                             ) : (
                                 <div className="flex items-center gap-2 text-[#8E918F] px-2">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-[#8E918F] animate-bounce" />
-                                    <span className="text-sm italic">System Ready.</span>
+                                    <div className={`w-1.5 h-1.5 rounded-full bg-[#8E918F] ${isCameraActive ? 'animate-bounce' : ''}`} />
+                                    <span className="text-sm italic">{isCameraActive ? 'System Ready.' : 'Camera Paused.'}</span>
                                 </div>
                             )}
                         </div>
@@ -477,8 +511,10 @@ const App: React.FC = () => {
                         <div className="flex gap-2">
                             <button 
                                 onClick={() => {
-                                    setIsVoiceActive(!isVoiceActive);
-                                    showToast(isVoiceActive ? "Voice Control Disabled" : "Voice Control Active", 'info');
+                                    const nextState = !isVoiceActive;
+                                    setIsVoiceActive(nextState);
+                                    showToast(nextState ? "Voice Control Active" : "Voice Control Disabled", 'info');
+                                    addLog(`Voice command module ${nextState ? 'enabled' : 'disabled'}.`, 'INFO');
                                 }}
                                 className={`p-3 rounded-full transition-all active:scale-95 border ${isVoiceActive ? 'bg-[#4A4458] border-[#E8DEF8] text-[#E8DEF8]' : 'bg-[#1E2229] border-[#444746] text-[#C4C7C5]'}`}
                                 title="Toggle Voice Commands"
