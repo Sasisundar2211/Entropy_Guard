@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Key, ShieldCheck, EyeOff, Boxes, Globe, Activity } from 'lucide-react';
+import { X, Key, ShieldCheck, EyeOff, Boxes, Globe, Activity, Eye, Mic } from 'lucide-react';
 import { PrivacyMode, Language } from '../types';
 
 interface SettingsModalProps {
@@ -13,11 +13,13 @@ interface SettingsModalProps {
   language: Language;
   onDetectLanguage: () => void;
   isDetectingLang: boolean;
+  privacyShieldActive: boolean;
+  setPrivacyShieldActive: (active: boolean) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ 
   isOpen, onClose, apiKey, setApiKey, privacyMode, setPrivacyMode, isModelLoaded, language,
-  onDetectLanguage, isDetectingLang
+  onDetectLanguage, isDetectingLang, privacyShieldActive, setPrivacyShieldActive
 }) => {
   const [inputVal, setInputVal] = useState(apiKey);
 
@@ -60,6 +62,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 Leave empty to run in <span className="text-yellow-500">SIMULATION MODE</span>.
             </p>
           </div>
+          
+           {/* Privacy Curtain Toggle */}
+           <div className="flex items-center justify-between p-3 bg-slate-800/50 rounded border border-slate-700">
+              <div className="flex items-center gap-3">
+                  <EyeOff size={18} className="text-slate-400" />
+                  <div>
+                      <h4 className="text-sm font-bold text-slate-200">PRIVACY CURTAIN</h4>
+                      <p className="text-[10px] text-slate-500">Blur faces automatically in video & screenshots</p>
+                  </div>
+              </div>
+              <button 
+                onClick={() => setPrivacyShieldActive(!privacyShieldActive)}
+                className={`w-12 h-6 rounded-full relative transition-colors ${privacyShieldActive ? 'bg-green-600' : 'bg-slate-700'}`}
+              >
+                  <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${privacyShieldActive ? 'left-7' : 'left-1'}`} />
+              </button>
+          </div>
 
           {/* Babel Protocol Section */}
           <div>
@@ -87,7 +106,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Privacy Config Section */}
           <div className="border-t border-slate-800 pt-4">
             <label className="block text-slate-400 text-sm mb-2 font-mono flex items-center gap-2">
-              <EyeOff size={16} /> PRIVACY SHIELD ENGINE
+              <Boxes size={16} /> INFRASTRUCTURE LAYER
             </label>
             <div className="grid grid-cols-2 gap-3">
               <button 

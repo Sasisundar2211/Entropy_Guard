@@ -4,18 +4,25 @@ import {
   Network, Activity, ClipboardList, FileText, Table, Download, 
   ChevronDown, ChevronUp, MessageSquare, Microscope, CheckCircle, XCircle,
   AlertTriangle, Settings, Scan, Camera, BrainCircuit, Youtube, X, Wand2, Play, Pause,
-  Zap, Layers, Cpu, Eye, Move, RotateCw, Maximize, Lock, Shield, Thermometer, Gauge, HardHat, Mic
+  Zap, Layers, Cpu, Eye, Move, RotateCw, Maximize, Lock, Shield, Thermometer, Gauge, HardHat, Mic, Leaf, EyeOff, Upload
 } from 'lucide-react';
 import { SettingsModal } from './components/SettingsModal';
 import { TutorialOverlay, TutorialStep } from './components/TutorialOverlay';
-import { analyzeCompliance, detectLanguageFromAudio, processYoutubeVideo, checkPPE, generateIncidentReport, parseARVoiceCommand } from './services/geminiService';
+import { analyzeCompliance, detectLanguageFromAudio, processYoutubeVideo, generateIncidentReport, parseARVoiceCommand, checkPPE, estimateWasteImpact, digitizeSOP } from './services/geminiService';
 import { 
   ComplianceResponse, DriftSeverity, ComplianceStatus, 
-  PrivacyMode, Language, AuditLogEntry, ToolVerificationLogEntry, PPEResponse, ARVoiceCommand
+  PrivacyMode, Language, AuditLogEntry, ToolVerificationLogEntry, ARVoiceCommand, PPEResponse
 } from './types';
 
 // Declare global handTrack from the CDN script
 declare const handTrack: any;
+// Declare speech recognition
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
 
 // Helper to extract YouTube ID for raw embed
 const getYouTubeID = (url: string) => {
@@ -31,10 +38,11 @@ const App: React.FC = () => {
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [toolHistory, setToolHistory] = useState<ToolVerificationLogEntry[]>([]);
   
-  // PPE & Safety State
-  const [isShiftActive, setIsShiftActive] = useState(false);
-  const [isScanningPPE, setIsScanningPPE] = useState(false);
-  const [ppeResult, setPpeResult] = useState<PPEResponse | null>(null);
+  // Safety State (Active by default, PPE check removed)
+  const [isShiftActive, setIsShiftActive] = useState(true);
+
+  // Sustainability State
+  const [greenScore, setGreenScore] = useState(0); // Grams of E-waste saved
 
   // Neural SOP State
   const [isSopOpen, setIsSopOpen] = useState(false);
@@ -45,12 +53,14 @@ const App: React.FC = () => {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isStepWaiting, setIsStepWaiting] = useState(false);
   const [currentThumbnail, setCurrentThumbnail] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Ghost Mode AR State
   const [isGhostMode, setIsGhostMode] = useState(false);
   const [ghostPos, setGhostPos] = useState({ x: 0, y: 0 });
   const [ghostRotate, setGhostRotate] = useState(0);
   const [ghostScale, setGhostScale] = useState(1);
+  const [ghostOpacity, setGhostOpacity] = useState(0.5);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [voiceFeedback, setVoiceFeedback] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -66,6 +76,9 @@ const App: React.FC = () => {
   const [isTutorialOpen, setIsTutorialOpen] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [lastResult, setLastResult] = useState<ComplianceResponse | null>(null);
+  const [isCheckingPPE, setIsCheckingPPE] = useState(false);
+  const [privacyShieldActive, setPrivacyShieldActive] = useState(false);
+  const [voiceActive, setVoiceActive] = useState(false);
 
   // Edge AI / Computer Vision State
   const webcamRef = useRef<Webcam>(null);
@@ -74,6 +87,7 @@ const App: React.FC = () => {
   const [edgeStatus, setEdgeStatus] = useState<string>("INITIALIZING EDGE LAYER...");
   const [isHazardDetected, setIsHazardDetected] = useState(false);
   const [fps, setFps] = useState(0);
+  const [isFreezing, setIsFreezing] = useState(false);
 
   // Load YouTube Iframe API
   useEffect(() => {
@@ -84,6 +98,54 @@ const App: React.FC = () => {
       firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
     }
   }, []);
+
+  // Voice Recognition Hook
+  useEffect(() => {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) return;
+      
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => setVoiceActive(true);
+      recognition.onend = () => {
+          setVoiceActive(false);
+          // Auto restart to keep listening
+          try { recognition.start(); } catch (e) {}
+      };
+      
+      recognition.onresult = (event: any) => {
+          const last = event.results.length - 1;
+          const transcript = event.results[last][0].transcript.trim().toLowerCase();
+          console.log("Voice Command:", transcript);
+          
+          if (transcript.includes("system check") || transcript.includes("check")) {
+              runAnalysis();
+          } else if (transcript.includes("system next") || transcript.includes("next step")) {
+              if (sopSteps.length > 0 && currentStepIndex < sopSteps.length - 1) {
+                   setCurrentStepIndex(prev => prev + 1);
+                   if (playerRef.current && playerRef.current.playVideo) playerRef.current.playVideo();
+                   setIsStepWaiting(false);
+              }
+          } else if (transcript.includes("system freeze") || transcript.includes("freeze")) {
+              setIsFreezing(prev => !prev);
+          } else if (transcript.includes("system digitize") || transcript.includes("digitize")) {
+              handleYoutubeSubmit(); 
+          }
+      };
+
+      try {
+          recognition.start();
+      } catch (e) {
+          console.error("Voice start failed", e);
+      }
+      
+      return () => {
+          try { recognition.stop(); } catch(e) {}
+      };
+  }, [sopSteps, currentStepIndex]);
 
   // Load HandTrack Model (Edge AI)
   useEffect(() => {
@@ -106,7 +168,7 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Edge AI Detection Loop (60 FPS Goal) & IoT Overlay
+  // Edge AI Detection Loop (60 FPS Goal) & IoT Overlay & Privacy Shield
   useEffect(() => {
     if (!handModel || !webcamRef.current?.video || !canvasRef.current) return;
 
@@ -125,12 +187,15 @@ const App: React.FC = () => {
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
             }
+            
+            if (isFreezing) {
+                 animationId = requestAnimationFrame(runDetection);
+                 return;
+            }
 
             // Detect Hand
-            // Only run heavier detection if Shift is Active to save resources during lock screen
-            // But for PPE check, we might want it. Let's keep it running but only draw HUD if active.
             let predictions = [];
-            if (isShiftActive || !isShiftActive) { // Always run to keep model warm
+            if (isShiftActive || !isShiftActive) { 
                  predictions = await handModel.detect(video);
             }
             
@@ -140,48 +205,63 @@ const App: React.FC = () => {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.save();
                 
+                // --- PRIVACY SHIELD (SIMULATED FACE BLUR) ---
+                if (privacyShieldActive) {
+                    // Simulate face region (Top Center 30% of screen)
+                    const faceX = canvas.width * 0.35;
+                    const faceY = canvas.height * 0.1;
+                    const faceW = canvas.width * 0.3;
+                    const faceH = canvas.height * 0.4;
+                    
+                    // Apply blur effect
+                    ctx.filter = 'blur(15px)';
+                    // Draw a copy of the video frame into this region to blur it visually on canvas
+                    // Note: This only blurs the canvas layer. To blur the video itself for the user, we overlay this.
+                    // But standard react-webcam doesn't support filter prop easily.
+                    // We will draw a blurred rectangle on the canvas that sits ON TOP of the video.
+                    ctx.drawImage(video, faceX, faceY, faceW, faceH, faceX, faceY, faceW, faceH);
+                    
+                    ctx.filter = 'none'; // Reset
+                    
+                    // Draw Privacy Shield Badge
+                    ctx.fillStyle = '#16a34a'; // Green
+                    ctx.font = 'bold 10px "JetBrains Mono"';
+                    ctx.fillText('PRIVACY SHIELD ACTIVE', faceX, faceY - 5);
+                    ctx.strokeStyle = '#16a34a';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(faceX, faceY, faceW, faceH);
+                }
+
                 // --- DIGITAL TWIN IOT OVERLAY ---
-                // Simulating sensor fusion data
                 if (isShiftActive) {
                     const time = Date.now();
                     const temp = 48.5 + Math.sin(time / 2000) * 2 + (Math.random() * 0.5);
                     const volt = 220.0 + Math.cos(time / 1500) * 1.5 + (Math.random() * 0.5);
                     const rpm = 1500 + Math.sin(time / 500) * 50;
                     
-                    // Draw Floating Telemetry Box
                     const telemX = 20;
                     const telemY = 80;
                     const telemW = 160;
                     const telemH = 90;
                     
-                    // Tech Box BG
                     ctx.fillStyle = 'rgba(2, 6, 23, 0.7)';
                     ctx.fillRect(telemX, telemY, telemW, telemH);
-                    ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)'; // Cyan dim
+                    ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)'; 
                     ctx.lineWidth = 1;
                     ctx.strokeRect(telemX, telemY, telemW, telemH);
 
-                    // Header
-                    ctx.fillStyle = '#94a3b8'; // Slate 400
+                    ctx.fillStyle = '#94a3b8';
                     ctx.font = '10px "JetBrains Mono"';
                     ctx.fillText('IOT SENSOR FUSION', telemX + 10, telemY + 15);
 
-                    // Data Points
                     ctx.font = 'bold 12px "JetBrains Mono"';
-                    
-                    // Temp
                     ctx.fillStyle = temp > 50 ? '#f87171' : '#22d3ee';
                     ctx.fillText(`TEMP: ${temp.toFixed(1)}°C`, telemX + 10, telemY + 35);
-                    
-                    // Volt
                     ctx.fillStyle = '#a78bfa';
                     ctx.fillText(`VOLT: ${volt.toFixed(1)}V`, telemX + 10, telemY + 55);
-
-                    // RPM
                     ctx.fillStyle = '#34d399';
                     ctx.fillText(`RPM : ${rpm.toFixed(0)}`, telemX + 10, telemY + 75);
                     
-                    // Connection Status
                     ctx.fillStyle = '#22c55e';
                     ctx.beginPath();
                     ctx.arc(telemX + telemW - 15, telemY + 12, 3, 0, Math.PI * 2);
@@ -266,7 +346,7 @@ const App: React.FC = () => {
 
     runDetection();
     return () => cancelAnimationFrame(animationId);
-  }, [handModel, isShiftActive]);
+  }, [handModel, isShiftActive, privacyShieldActive, isFreezing]);
 
   // AR Calibration Logic
   useEffect(() => {
@@ -326,7 +406,6 @@ const App: React.FC = () => {
             setVoiceFeedback(`Command: ${cmd}`);
             
             // Execute Command
-            const SHIFT_MULTIPLIER = 10;
             switch(cmd) {
                 case 'MOVE_LEFT': setGhostPos(p => ({ ...p, x: p.x - 50 })); break;
                 case 'MOVE_RIGHT': setGhostPos(p => ({ ...p, x: p.x + 50 })); break;
@@ -342,7 +421,6 @@ const App: React.FC = () => {
 
             setTimeout(() => setVoiceFeedback(null), 3000);
           };
-          // Stop all tracks
           stream.getTracks().forEach(track => track.stop());
         };
 
@@ -391,7 +469,7 @@ const App: React.FC = () => {
       setIsStepWaiting(false);
       if (currentStepIndex < sopSteps.length - 1) {
           setCurrentStepIndex(prev => prev + 1);
-          playerRef.current.playVideo();
+          if (playerRef.current && playerRef.current.playVideo) playerRef.current.playVideo();
       } else {
           alert("SOP Complete.");
           setActiveYoutubeUrl(null);
@@ -425,38 +503,90 @@ const App: React.FC = () => {
       if (!youtubeUrl) return;
       setIsProcessingYt(true);
       try {
-          const data = await processYoutubeVideo(apiKey, youtubeUrl);
-          setActiveYoutubeUrl(youtubeUrl);
-          setCurrentThumbnail(data.thumbnail);
-          const sortedSteps = data.steps.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-          setSopSteps(sortedSteps);
-          setCurrentStepIndex(0);
-          setIsStepWaiting(false);
+          // If it's a Youtube URL, process as video
+          if (youtubeUrl.includes('youtube') || youtubeUrl.includes('youtu.be')) {
+              const data = await processYoutubeVideo(apiKey, youtubeUrl);
+              setActiveYoutubeUrl(youtubeUrl);
+              setCurrentThumbnail(data.thumbnail);
+              const sortedSteps = data.steps.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+              setSopSteps(sortedSteps);
+              setCurrentStepIndex(0);
+              setIsStepWaiting(false);
+          } else {
+              // Assume it's a text prompt or image URL for "Digitize SOP" mode
+              const steps = await digitizeSOP(apiKey, youtubeUrl);
+              setSopSteps(steps);
+              setCurrentStepIndex(0);
+              setIsStepWaiting(false);
+          }
           setYoutubeUrl(""); 
       } catch (e) { console.error(e); }
       setIsProcessingYt(false);
   };
-
-  const handlePPEScan = async () => {
-      if (!webcamRef.current) return;
-      setIsScanningPPE(true);
+  
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
       
-      const imageSrc = webcamRef.current.getScreenshot();
-      if (imageSrc) {
-          const result = await checkPPE(apiKey, imageSrc);
-          setPpeResult(result);
-          if (result.compliant) {
-              setTimeout(() => setIsShiftActive(true), 800);
+      setIsProcessingYt(true);
+      try {
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+              const base64 = reader.result as string;
+              // Simulate PDF/Doc parsing by sending base64 to digitizeSOP
+              const steps = await digitizeSOP(apiKey, base64);
+              setSopSteps(steps);
+              setCurrentStepIndex(0);
+              setIsStepWaiting(false);
+              setActiveYoutubeUrl(null); // Clear video if switching to manual
+          };
+          reader.readAsDataURL(file);
+      } catch (e) { console.error(e); }
+      setIsProcessingYt(false);
+  };
+
+  const handlePPECheck = async () => {
+      if (!webcamRef.current) return;
+      setIsCheckingPPE(true);
+      try {
+          const imageSrc = webcamRef.current.getScreenshot();
+          if (imageSrc) {
+              const result = await checkPPE(apiKey, imageSrc);
+              alert(result.compliant ? "✅ PPE CHECK PASSED: Fully compliant." : `⚠ PPE CHECK FAILED: ${result.missing_items.join(", ")}`);
           }
-      }
-      setIsScanningPPE(false);
+      } catch(e) { console.error(e); }
+      setIsCheckingPPE(false);
   };
 
   const runAnalysis = async () => {
       setIsAnalyzing(true);
       if (webcamRef.current) {
-          const imageSrc = webcamRef.current.getScreenshot();
+          let imageSrc = webcamRef.current.getScreenshot();
+          
           if (imageSrc) {
+              // If Privacy Shield is active, apply blur to the screenshot before sending
+              if (privacyShieldActive && canvasRef.current) {
+                   const video = webcamRef.current.video;
+                   const tempCanvas = document.createElement('canvas');
+                   if (video) {
+                       tempCanvas.width = video.videoWidth;
+                       tempCanvas.height = video.videoHeight;
+                       const tCtx = tempCanvas.getContext('2d');
+                       if (tCtx) {
+                           tCtx.drawImage(video, 0, 0);
+                           // Apply Privacy Blur
+                           const faceX = tempCanvas.width * 0.35;
+                           const faceY = tempCanvas.height * 0.1;
+                           const faceW = tempCanvas.width * 0.3;
+                           const faceH = tempCanvas.height * 0.4;
+                           tCtx.filter = 'blur(15px)';
+                           tCtx.drawImage(tempCanvas, faceX, faceY, faceW, faceH, faceX, faceY, faceW, faceH);
+                           tCtx.filter = 'none';
+                           imageSrc = tempCanvas.toDataURL('image/jpeg');
+                       }
+                   }
+              }
+
               const currentStepText = sopSteps.length > 0 && currentStepIndex < sopSteps.length 
                   ? sopSteps[currentStepIndex].text 
                   : "Standard Operating Procedure";
@@ -473,10 +603,31 @@ const App: React.FC = () => {
               );
               setLastResult(result);
               
+              if (result.status === ComplianceStatus.MATCH) {
+                 // Auto-complete step and advance if verified safe
+                 if (sopSteps.length > 0 && currentStepIndex < sopSteps.length) {
+                     const newSteps = [...sopSteps];
+                     newSteps[currentStepIndex].completed = true;
+                     setSopSteps(newSteps);
+                     
+                     if (currentStepIndex < sopSteps.length - 1) {
+                         setTimeout(() => {
+                             setCurrentStepIndex(curr => curr + 1);
+                             // If video active, play it
+                             if (playerRef.current && playerRef.current.playVideo) playerRef.current.playVideo();
+                         }, 1500);
+                     }
+                 }
+              }
+
               if (result.status === ComplianceStatus.DRIFT) {
                   // --- AUTOMATED INCIDENT REPORTING ---
                   let reportUrl: string | undefined = undefined;
                   
+                  // Calculate potential waste saved if corrected
+                  const saved = await estimateWasteImpact(apiKey, currentStepText);
+                  setGreenScore(prev => prev + saved);
+
                   if (result.drift_severity === DriftSeverity.CRITICAL) {
                       const logEntryForReport: AuditLogEntry = {
                           id: Date.now().toString(),
@@ -532,6 +683,8 @@ const App: React.FC = () => {
         language={language}
         onDetectLanguage={handleDetectLanguage}
         isDetectingLang={isDetectingLang}
+        privacyShieldActive={privacyShieldActive}
+        setPrivacyShieldActive={setPrivacyShieldActive}
       />
 
       {isShiftActive && (
@@ -562,9 +715,31 @@ const App: React.FC = () => {
                      <Layers size={12} className="text-cyan-400" />
                      <span>MODEL: GEMINI 3 PRO</span>
                  </div>
+                 <div className="w-px h-3 bg-white/10"></div>
+                 <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
+                     <Leaf size={12} className="text-green-400" />
+                     <span>SAVED: {greenScore}g</span>
+                 </div>
+                 <div className="w-px h-3 bg-white/10"></div>
+                 <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
+                     {voiceActive ? <Mic size={12} className="text-red-500 animate-pulse" /> : <Mic size={12} className="text-slate-500" />}
+                     <span>VOICE: {voiceActive ? 'LISTENING' : 'STANDBY'}</span>
+                 </div>
              </div>
 
              <div className="pointer-events-auto flex items-center gap-3">
+                 {privacyShieldActive && (
+                     <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-green-900/40 border border-green-500/30 rounded-full text-green-400 text-xs font-bold animate-pulse">
+                         <Shield size={14} /> PRIVACY
+                     </div>
+                 )}
+                 <button 
+                    onClick={handlePPECheck}
+                    disabled={isCheckingPPE}
+                    className="p-2.5 bg-slate-900/80 hover:bg-slate-800 rounded-full text-slate-400 hover:text-green-400 border border-white/10 transition-all flex items-center justify-center"
+                 >
+                     {isCheckingPPE ? <Activity size={20} className="animate-spin" /> : <Shield size={20} />}
+                 </button>
                  <button 
                     data-tour-id="sop-toggle"
                     onClick={() => setIsSopOpen(!isSopOpen)}
@@ -593,14 +768,14 @@ const App: React.FC = () => {
                          </button>
                      </div>
 
-                     {!activeYoutubeUrl ? (
+                     {!activeYoutubeUrl && sopSteps.length === 0 ? (
                          <div className="bg-slate-900/50 border border-dashed border-slate-700 rounded-2xl p-6 text-center">
-                             <p className="text-sm text-slate-400 mb-4">Paste a protocol video URL to generate safety checks.</p>
+                             <p className="text-sm text-slate-400 mb-4">Paste a protocol video URL or Text to generate safety checks.</p>
                              <input 
                                 type="text" 
                                 value={youtubeUrl}
                                 onChange={(e) => setYoutubeUrl(e.target.value)}
-                                placeholder="https://youtube.com/..."
+                                placeholder="https://youtube.com/... or 'Check hydraulic pressure'"
                                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-sm mb-3 focus:border-cyan-500 focus:outline-none transition-colors"
                              />
                              <button 
@@ -609,46 +784,67 @@ const App: React.FC = () => {
                                 className="w-full bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-bold py-3 rounded-lg text-sm flex items-center justify-center gap-2 transition-all"
                              >
                                 {isProcessingYt ? <Activity className="animate-spin" size={16}/> : <Wand2 size={16}/>}
-                                GENERATE PROTOCOL
+                                DIGITIZE PROTOCOL
+                             </button>
+                             <div className="flex items-center gap-2 my-2">
+                                <div className="h-px bg-slate-800 flex-1" />
+                                <span className="text-xs text-slate-600 font-bold">OR</span>
+                                <div className="h-px bg-slate-800 flex-1" />
+                             </div>
+                             <input 
+                                type="file" 
+                                ref={fileInputRef} 
+                                onChange={handleFileUpload} 
+                                className="hidden" 
+                                accept="application/pdf,image/*" 
+                             />
+                             <button 
+                                onClick={() => fileInputRef.current?.click()}
+                                className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-lg text-sm flex items-center justify-center gap-2 transition-all border border-slate-700 group"
+                             >
+                                {isProcessingYt ? <Activity className="animate-spin text-cyan-400" size={16}/> : <Scan size={16} className="text-slate-400 group-hover:text-cyan-400 transition-colors"/>}
+                                {isProcessingYt ? "DIGITIZING..." : "DIGITIZE MANUAL (PDF/IMG)"}
                              </button>
                          </div>
                      ) : (
                          <div className="space-y-6 animate-in slide-in-from-left-4 fade-in">
                              {/* Neural Player */}
-                             <div className="w-full aspect-video bg-black rounded-xl overflow-hidden shadow-2xl relative group border border-white/10">
-                                <iframe
-                                    id="neural-sop-frame"
-                                    src={`https://www.youtube-nocookie.com/embed/${getYouTubeID(activeYoutubeUrl)}?rel=0&modestbranding=1&origin=${window.location.origin}&enablejsapi=1`}
-                                    className="w-full h-full"
-                                    title="Neural SOP Player"
-                                    frameBorder="0"
-                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                                    referrerPolicy="no-referrer"
-                                    sandbox="allow-scripts allow-same-origin allow-presentation"
-                                    loading="lazy"
-                                />
-                                <button 
-                                    onClick={() => { setActiveYoutubeUrl(null); setSopSteps([]); setCurrentThumbnail(null); }} 
-                                    className="absolute top-2 right-2 z-20 bg-black/60 hover:bg-red-600/90 text-white p-1.5 rounded-full transition-colors backdrop-blur-sm opacity-0 group-hover:opacity-100 duration-200"
-                                >
-                                    <X size={14}/>
-                                </button>
-                                {isStepWaiting && (
-                                    <div className="absolute inset-0 z-10 bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center text-center p-6 animate-in fade-in">
-                                        <div className="w-12 h-12 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center mb-3">
-                                            <Pause size={24} fill="currentColor" />
+                             {activeYoutubeUrl && (
+                                <div className="w-full aspect-video bg-black rounded-xl overflow-hidden shadow-2xl relative group border border-white/10">
+                                    <iframe
+                                        id="neural-sop-frame"
+                                        src={`https://www.youtube-nocookie.com/embed/${getYouTubeID(activeYoutubeUrl)}?rel=0&modestbranding=1&origin=${window.location.origin}&enablejsapi=1`}
+                                        className="w-full h-full"
+                                        title="Neural SOP Player"
+                                        frameBorder="0"
+                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                        referrerPolicy="no-referrer"
+                                        sandbox="allow-scripts allow-same-origin allow-presentation"
+                                        loading="lazy"
+                                    />
+                                    <button 
+                                        onClick={() => { setActiveYoutubeUrl(null); setSopSteps([]); setCurrentThumbnail(null); }} 
+                                        className="absolute top-2 right-2 z-20 bg-black/60 hover:bg-red-600/90 text-white p-1.5 rounded-full transition-colors backdrop-blur-sm opacity-0 group-hover:opacity-100 duration-200"
+                                    >
+                                        <X size={14}/>
+                                    </button>
+                                    {isStepWaiting && (
+                                        <div className="absolute inset-0 z-10 bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center text-center p-6 animate-in fade-in">
+                                            <div className="w-12 h-12 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center mb-3">
+                                                <Pause size={24} fill="currentColor" />
+                                            </div>
+                                            <h3 className="text-lg font-bold text-white mb-1">Step {currentStepIndex + 1} Milestone</h3>
+                                            <p className="text-sm text-slate-300 mb-6">{sopSteps[currentStepIndex]?.text}</p>
+                                            <button 
+                                                onClick={handleStepConfirm}
+                                                className="px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-black font-bold rounded-full flex items-center gap-2 transition-all shadow-lg hover:shadow-cyan-500/25"
+                                            >
+                                                <CheckCircle size={16} /> CONFIRM & CONTINUE
+                                            </button>
                                         </div>
-                                        <h3 className="text-lg font-bold text-white mb-1">Step {currentStepIndex + 1} Milestone</h3>
-                                        <p className="text-sm text-slate-300 mb-6">{sopSteps[currentStepIndex]?.text}</p>
-                                        <button 
-                                            onClick={handleStepConfirm}
-                                            className="px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-black font-bold rounded-full flex items-center gap-2 transition-all shadow-lg hover:shadow-cyan-500/25"
-                                        >
-                                            <CheckCircle size={16} /> CONFIRM & CONTINUE
-                                        </button>
-                                    </div>
-                                )}
-                             </div>
+                                    )}
+                                </div>
+                             )}
 
                              {/* Ghost Mode Toggle */}
                              <button 
@@ -674,12 +870,15 @@ const App: React.FC = () => {
                              )}
 
                              <div className="space-y-3">
-                                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex justify-between items-center">
-                                     <span>Extracted Steps</span>
-                                     <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-400">
-                                         {currentStepIndex + 1}/{sopSteps.length}
-                                     </span>
-                                 </h3>
+                                 <div className="flex justify-between items-center">
+                                     <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex justify-between items-center">
+                                         <span>Extracted Steps</span>
+                                         <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-400 ml-2">
+                                             {currentStepIndex + 1}/{sopSteps.length}
+                                         </span>
+                                     </h3>
+                                     <button onClick={() => { setSopSteps([]); setActiveYoutubeUrl(null); }} className="text-xs text-red-400 hover:text-red-300">Clear</button>
+                                 </div>
                                  {sopSteps.length === 0 ? (
                                      <div className="p-4 bg-slate-900/50 rounded-lg border border-white/5 text-center text-slate-500 text-xs">
                                          Analysis running...
@@ -688,28 +887,31 @@ const App: React.FC = () => {
                                      sopSteps.map((step, idx) => (
                                          <div 
                                             key={step.id} 
-                                            className={`p-4 border rounded-xl flex gap-3 transition-all ${
+                                            onClick={() => setCurrentStepIndex(idx)}
+                                            className={`p-4 border rounded-xl flex gap-3 transition-all cursor-pointer group ${
                                                 idx === currentStepIndex 
                                                 ? 'bg-cyan-950/20 border-cyan-500/50 shadow-[0_0_20px_rgba(6,182,212,0.1)]' 
-                                                : idx < currentStepIndex
-                                                ? 'bg-slate-900/30 border-white/5 opacity-50'
-                                                : 'bg-slate-800/40 border-white/5'
+                                                : step.completed
+                                                ? 'bg-slate-900/30 border-green-900/30 opacity-60 hover:opacity-100'
+                                                : 'bg-slate-800/40 border-white/5 hover:border-white/10'
                                             }`}
                                          >
                                              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center text-[10px] font-bold shrink-0 ${
                                                  idx === currentStepIndex 
                                                  ? 'border-cyan-400 text-cyan-400' 
-                                                 : idx < currentStepIndex
-                                                 ? 'border-green-800 text-green-700'
+                                                 : step.completed
+                                                 ? 'border-green-600 text-green-500 bg-green-900/20'
                                                  : 'border-slate-600 text-slate-400'
                                              }`}>
-                                                 {idx < currentStepIndex ? <CheckCircle size={12} /> : step.id}
+                                                 {step.completed ? <CheckCircle size={12} /> : step.id}
                                              </div>
                                              <div>
-                                                 <p className={`text-sm font-medium ${idx === currentStepIndex ? 'text-white' : 'text-slate-400'}`}>{step.text}</p>
-                                                 <p className="text-[10px] text-slate-500 mt-1">
-                                                     Tools: {step.tools?.join(', ') || 'N/A'} • {step.timestamp}s
-                                                 </p>
+                                                 <p className={`text-sm font-medium ${idx === currentStepIndex ? 'text-white' : step.completed ? 'text-slate-500 line-through decoration-slate-600' : 'text-slate-400'}`}>{step.text}</p>
+                                                 {step.tools && step.tools.length > 0 && (
+                                                     <p className="text-[10px] text-slate-500 mt-1">
+                                                         Tools: {step.tools?.join(', ') || 'N/A'}
+                                                     </p>
+                                                 )}
                                              </div>
                                          </div>
                                      ))
@@ -737,10 +939,11 @@ const App: React.FC = () => {
                             <img 
                                 src={currentThumbnail} 
                                 alt="Ghost Reference" 
-                                className="w-full h-full object-cover opacity-50 transition-transform duration-75 ease-out"
+                                className="w-full h-full object-cover transition-transform duration-75 ease-out"
                                 style={{
                                     transform: `translate(${ghostPos.x}px, ${ghostPos.y}px) rotate(${ghostRotate}deg) scale(${ghostScale})`,
-                                    transformOrigin: 'center center'
+                                    transformOrigin: 'center center',
+                                    opacity: ghostOpacity
                                 }}
                             />
                         </div>
@@ -789,6 +992,26 @@ const App: React.FC = () => {
                                 </div>
                             </div>
                             <div className="w-px h-8 bg-white/10"></div>
+                            <div className="flex flex-col items-center gap-1 pointer-events-auto">
+                                <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
+                                    <Eye size={14} /> OPACITY
+                                </div>
+                                <div className="flex gap-1 text-cyan-400 font-bold font-mono">
+                                    {Math.round(ghostOpacity * 100)}%
+                                </div>
+                                <div className="flex gap-1 mt-1">
+                                     <input 
+                                        type="range" 
+                                        min="0.1" 
+                                        max="1" 
+                                        step="0.1" 
+                                        value={ghostOpacity}
+                                        onChange={(e) => setGhostOpacity(parseFloat(e.target.value))}
+                                        className="w-16 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                                    />
+                                </div>
+                            </div>
+                            <div className="w-px h-8 bg-white/10"></div>
                             <div className="flex flex-col items-center gap-2 relative">
                                 {voiceFeedback && (
                                     <div className="absolute -top-12 left-1/2 -translate-x-1/2 whitespace-nowrap bg-black/90 text-white text-xs px-3 py-1.5 rounded-full border border-white/20 animate-in fade-in slide-in-from-bottom-2">
@@ -813,70 +1036,6 @@ const App: React.FC = () => {
                     className="absolute inset-0 w-full h-full object-cover pointer-events-none"
                  />
                  
-                 {/* PPE SENTINEL LOCK SCREEN */}
-                 {!isShiftActive && (
-                     <div className="absolute inset-0 z-40 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-6">
-                         <div className="max-w-md w-full bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-8 text-center space-y-6 animate-in zoom-in-95">
-                             <div className="flex justify-center">
-                                <div className="p-4 bg-slate-800 rounded-full text-slate-400 ring-4 ring-slate-800/50">
-                                    <Shield size={48} />
-                                </div>
-                             </div>
-                             
-                             <div>
-                                 <h2 className="text-2xl font-bold text-white tracking-widest mb-2">PPE SENTINEL ACTIVE</h2>
-                                 <p className="text-slate-400 text-sm">Industrial Compliance Check required to proceed.</p>
-                             </div>
-
-                             <div className="bg-black/50 rounded-xl p-4 border border-white/5 space-y-3 text-left">
-                                 {/* Item 1 */}
-                                 <div className="flex items-center gap-3 text-sm">
-                                     {ppeResult ? (
-                                        ppeResult.missing_items.some(i => i.toLowerCase().includes('glass') || i.toLowerCase().includes('eye')) ? 
-                                        <XCircle className="text-red-500" size={18} /> : 
-                                        <CheckCircle className="text-green-500" size={18} />
-                                     ) : (
-                                        <div className="w-4 h-4 rounded-full border-2 border-slate-600" />
-                                     )}
-                                     <span className={ppeResult && ppeResult.missing_items.some(i => i.toLowerCase().includes('glass') || i.toLowerCase().includes('eye')) ? "text-red-200" : "text-slate-300"}>
-                                         Safety Glasses / Eye Protection
-                                     </span>
-                                 </div>
-
-                                 {/* Item 2 */}
-                                 <div className="flex items-center gap-3 text-sm">
-                                      {ppeResult ? (
-                                        ppeResult.missing_items.some(i => i.toLowerCase().includes('vest') || i.toLowerCase().includes('uniform') || i.toLowerCase().includes('coat')) ? 
-                                        <XCircle className="text-red-500" size={18} /> : 
-                                        <CheckCircle className="text-green-500" size={18} />
-                                     ) : (
-                                        <div className="w-4 h-4 rounded-full border-2 border-slate-600" />
-                                     )}
-                                     <span className={ppeResult && ppeResult.missing_items.some(i => i.toLowerCase().includes('vest') || i.toLowerCase().includes('uniform') || i.toLowerCase().includes('coat')) ? "text-red-200" : "text-slate-300"}>
-                                         High-Visibility Vest / Uniform
-                                     </span>
-                                 </div>
-                             </div>
-
-                             {ppeResult && !ppeResult.compliant && (
-                                 <div className="p-3 bg-red-950/50 border border-red-500/30 rounded-lg text-red-200 text-sm font-bold flex items-center gap-2 justify-center animate-in slide-in-from-bottom-2">
-                                     <AlertTriangle size={16} />
-                                     {ppeResult.message}
-                                 </div>
-                             )}
-
-                             <button 
-                                onClick={handlePPEScan}
-                                disabled={isScanningPPE}
-                                className="w-full py-4 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl shadow-lg hover:shadow-cyan-500/25 transition-all flex items-center justify-center gap-2"
-                             >
-                                {isScanningPPE ? <Activity className="animate-spin" /> : <Scan />}
-                                {isScanningPPE ? "SCANNING BIOMETRICS..." : "VERIFY COMPLIANCE & UNLOCK"}
-                             </button>
-                         </div>
-                     </div>
-                 )}
-
                  {/* 4. Cognitive Analysis Result Overlay */}
                  {lastResult && isShiftActive && (
                      <div className="absolute top-24 left-10 p-4 bg-black/60 backdrop-blur border border-white/10 rounded-xl max-w-sm pointer-events-none z-10 animate-in zoom-in-95">

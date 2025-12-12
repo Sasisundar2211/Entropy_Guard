@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type, SchemaParams } from "@google/genai";
 import { jsPDF } from "jspdf";
-import { ComplianceResponse, ComplianceStatus, DriftSeverity, SOPStep, PreFlightResult, Language, TranslationOverlay, ToolVerificationResult, HazardZone, MasterSOPStep, PPEResponse, AuditLogEntry, ARVoiceCommand } from "../types";
+import { ComplianceResponse, ComplianceStatus, DriftSeverity, SOPStep, PreFlightResult, Language, TranslationOverlay, ToolVerificationResult, HazardZone, MasterSOPStep, AuditLogEntry, ARVoiceCommand, PPEResponse } from "../types";
 
 // Mock response for when no API key is provided or for testing
 const MOCK_RESPONSE_DRIFT: ComplianceResponse = {
@@ -137,6 +137,7 @@ export const generateSchematic = async (apiKey: string): Promise<string> => {
 
 export const digitizeSOP = async (apiKey: string, referenceBase64: string): Promise<SOPStep[]> => {
     if (!apiKey) {
+        await new Promise(r => setTimeout(r, 1500));
         // Mock data
         return [
             { id: 1, text: "Verify power unit is disconnected.", completed: false },
@@ -148,11 +149,11 @@ export const digitizeSOP = async (apiKey: string, referenceBase64: string): Prom
 
     try {
         const ai = new GoogleGenAI({ apiKey });
-        // Clean base64
+        
+        const parts: any[] = [{ text: "Analyze this technical document or image. Extract a precise, sequential safety checklist or standard operating procedure (SOP). Return a simple JSON array of strings, one for each step. Keep steps concise (under 10 words)." }];
+        
+        // Check if input is base64 image or just text/url
         const matches = referenceBase64.match(/^data:(.+);base64,(.+)$/);
-        
-        const parts: any[] = [{ text: "Analyze this technical document or schematic. Extract a precise, sequential safety checklist or standard operating procedure (SOP). Return a simple JSON array of strings, one for each step. Keep steps concise (under 10 words)." }];
-        
         if (matches) {
             parts.push({
                 inlineData: {
