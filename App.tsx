@@ -11,7 +11,7 @@ import {
     Languages, ScanEye, ZoomIn, Target, MessageSquare, Sparkles, AlertCircle,
     Hand, GripHorizontal, Microscope, ClipboardList, Video, Leaf,
     FileText as FileDoc, Table, FileOutput, HelpCircle, Youtube, Link as LinkIcon,
-    Play, Pause, FastForward, SkipBack, Layers, FileJson
+    Play, Pause, FastForward, SkipBack, Layers, FileJson, BrainCircuit, Scan, Siren
 } from 'lucide-react';
 import { analyzeCompliance, generateSchematic, digitizeSOP, performPreFlightCheck, detectLanguageFromAudio, performEnvironmentalTranslation, verifyToolState, generateSOPFromFrames, estimateWasteImpact, processYoutubeVideo } from './services/geminiService';
 import { SettingsModal } from './components/SettingsModal';
@@ -27,42 +27,30 @@ declare global {
 
 const TUTORIAL_STEPS: TutorialStep[] = [
     {
-        title: "Welcome to EntropyGuard",
-        content: "Your AI-powered industrial compliance agent. This system uses computer vision to prevent errors, reduce waste, and enforce standard operating procedures in real-time.",
+        title: "Hybrid AI Architecture",
+        content: "EntropyGuard employs a Dual-Inference Pipeline. We combine Edge DL (Fast) for safety with Cloud GenAI (Slow) for reasoning.",
         targetId: undefined, // Center
         position: 'center'
     },
     {
-        title: "Reference Standard",
-        content: "Load your technical drawings, schematics, or PDFs here. You can also upload YouTube video URLs or scan a physical manual with your camera.",
-        targetId: "ref-panel",
-        position: "right"
+        title: "Edge Perception Layer",
+        content: "This video feed runs a Convolutional Neural Network (CNN) locally at 30 FPS to track hands and enforce spatial geofencing (Hazard Zones).",
+        targetId: "video-feed",
+        position: "center"
     },
     {
-        title: "AR Calibration",
-        content: "Use these controls to align the 'Ghost' overlay (your reference) with the live camera feed. This calibration ensures accurate drift detection.",
-        targetId: "ar-controls",
-        position: "bottom"
-    },
-    {
-        title: "Voice Command",
-        content: "Hands busy? This indicator shows when the system is listening. Try commands like 'System Check', 'Freeze Feed', or 'Verify Tool'.",
-        targetId: "voice-indicator",
-        position: "bottom"
-    },
-    {
-        title: "Arm Intelligence",
-        content: "Click this button to activate the continuous monitoring loop. The AI will check for compliance and safety hazards every few seconds.",
-        targetId: "arm-button",
-        position: "top"
-    },
-    {
-        title: "Telemetry & Logs",
-        content: "Expand this drawer to view real-time audit logs, drift events, and tool verification history. You can also export this data to Google Docs or Sheets.",
+        title: "Cognitive Reasoning Layer",
+        content: "Gemini 3 Pro runs asynchronously in the cloud to perform Zero-Shot Semantic Anomaly Detection against your Reference Standard.",
         targetId: "telemetry-drawer",
         position: "top"
     }
 ];
+
+// Defined Hazard Zone (0-1000 scale) - e.g., High Voltage area in bottom right
+const STATIC_HAZARD_ZONE: HazardZone = {
+    label: "HIGH VOLTAGE CAPACITOR",
+    boundingBox: [600, 600, 950, 950] // ymin, xmin, ymax, xmax
+};
 
 const App: React.FC = () => {
   // ------------------------------------------------------------------------
@@ -108,14 +96,15 @@ const App: React.FC = () => {
 
   // V5.0 Instrument Verifier & Geofencing
   const [isMacroMode, setIsMacroMode] = useState(false);
-  const [hazards, setHazards] = useState<HazardZone[]>([]);
+  const [hazards, setHazards] = useState<HazardZone[]>([STATIC_HAZARD_ZONE]);
   const [toolCheckStatus, setToolCheckStatus] = useState<'IDLE' | 'MATCH' | 'MISMATCH'>('IDLE');
   const [toolHistory, setToolHistory] = useState<ToolVerificationLogEntry[]>([]);
   const [telemetryView, setTelemetryView] = useState<'DRIFT' | 'TOOL'>('DRIFT');
 
-  // V6.0 Gesture Control
+  // V6.0 Gesture Control (Edge Layer)
   const [isGestureEnabled, setIsGestureEnabled] = useState(false);
   const [gestureModelLoaded, setGestureModelLoaded] = useState(false);
+  const [edgeSafetyViolation, setEdgeSafetyViolation] = useState(false);
 
   // V7.0 Master Mode & Green Score
   const [isMasterMode, setIsMasterMode] = useState(false);
@@ -157,14 +146,19 @@ const App: React.FC = () => {
   const lastGestureTimeRef = useRef<number>(0);
   const recordedFramesRef = useRef<string[]>([]);
   const playerRef = useRef<any>(null);
+  const edgeLoopRef = useRef<number>(0);
 
   // State Refs for Voice Logic
   const sopStepsRef = useRef(sopSteps);
   const ghostOpacityRef = useRef(ghostOpacity);
+  const isArmedRef = useRef(isArmed);
+  const hazardsRef = useRef(hazards);
 
   useEffect(() => { analyzingRef.current = isAnalyzing; }, [isAnalyzing]);
   useEffect(() => { sopStepsRef.current = sopSteps; }, [sopSteps]);
   useEffect(() => { ghostOpacityRef.current = ghostOpacity; }, [ghostOpacity]);
+  useEffect(() => { isArmedRef.current = isArmed; }, [isArmed]);
+  useEffect(() => { hazardsRef.current = hazards; }, [hazards]);
 
   // Load API Key & Check Tutorial
   useEffect(() => {
@@ -366,12 +360,12 @@ const App: React.FC = () => {
       });
   }, [isPrivacyMode, privacyEngine, isModelLoaded]);
 
-  const drawOverlay = (coords: number[], status: ComplianceStatus, translations: TranslationOverlay[] = []) => {
+  const drawOverlay = useCallback((coords: number[], status: ComplianceStatus, translations: TranslationOverlay[] = [], hands: any[] = []) => {
     const canvas = canvasRef.current;
     const video = webcamRef.current?.video;
     
     // Skip standard drawing in Macro Mode to focus on Reticle
-    if (isMacroMode) return;
+    if (isMacroMode && !edgeSafetyViolation) return;
 
     if (canvas && video) {
       const ctx = canvas.getContext('2d');
@@ -383,14 +377,54 @@ const App: React.FC = () => {
         const scaleX = canvas.width / 1000;
         const scaleY = canvas.height / 1000;
 
-        // Draw Translations (Magic Lens)
+        // --- EDGE LAYER: Draw Hazard Zones (Geofencing) ---
+        hazards.forEach(hazard => {
+            const [ymin, xmin, ymax, xmax] = hazard.boundingBox;
+            let x = xmin * scaleX;
+            let y = ymin * scaleY;
+            let w = (xmax - xmin) * scaleX;
+            let h = (ymax - ymin) * scaleY;
+            
+            if (isMirrored) x = canvas.width - (x + w);
+
+            // Draw Hazard Box (Dashed Red)
+            ctx.strokeStyle = "rgba(239, 68, 68, 0.8)";
+            ctx.lineWidth = 3;
+            ctx.setLineDash([10, 5]);
+            ctx.strokeRect(x, y, w, h);
+            ctx.setLineDash([]);
+            
+            // Label
+            ctx.fillStyle = "rgba(239, 68, 68, 0.8)";
+            ctx.fillRect(x, y - 24, ctx.measureText(hazard.label).width + 20, 24);
+            ctx.fillStyle = "white";
+            ctx.font = "bold 12px monospace";
+            ctx.fillText(hazard.label, x + 10, y - 8);
+        });
+
+        // --- EDGE LAYER: Draw Hands ---
+        hands.forEach(hand => {
+             // handtrack.js returns [x, y, w, h] relative to video
+             // We need to scale if canvas size differs from detection size, 
+             // but usually handtrack works on video el size.
+             const [bx, by, bw, bh] = hand.bbox;
+             let hx = bx;
+             if (isMirrored) hx = canvas.width - (bx + bw);
+             
+             ctx.strokeStyle = edgeSafetyViolation ? "#ef4444" : "#22d3ee"; // Red if violation, Cyan if safe
+             ctx.lineWidth = 2;
+             ctx.strokeRect(hx, by, bw, bh);
+        });
+
+
+        // --- COGNITIVE LAYER: Translations (Magic Lens) ---
         if (translations.length > 0) {
             ctx.font = 'bold 16px "Inter", sans-serif';
             translations.forEach(t => {
                 let [ymin, xmin, ymax, xmax] = t.boundingBox;
                 if (ymin <= 1) { ymin *= 1000; xmin *= 1000; ymax *= 1000; xmax *= 1000; }
-                let x = xmin, w = xmax - xmin, y = ymin, h = ymax - ymin;
-                if (isMirrored) x = 1000 - (x + w);
+                let x = xmin * scaleX, w = (xmax - xmin) * scaleX, y = ymin * scaleY, h = (ymax - ymin) * scaleY;
+                if (isMirrored) x = canvas.width - (x + w);
 
                 // Google Lens Style Overlay for text
                 ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
@@ -398,15 +432,16 @@ const App: React.FC = () => {
                 
                 // Draw pill
                 ctx.beginPath();
-                ctx.roundRect((x * scaleX), (y * scaleY), textWidth, 30, 15);
+                if (ctx.roundRect) ctx.roundRect(x, y, textWidth, 30, 15);
+                else ctx.rect(x, y, textWidth, 30);
                 ctx.fill();
 
                 ctx.fillStyle = "#0f172a";
-                ctx.fillText(t.text, (x * scaleX) + 10, (y * scaleY) + 20);
+                ctx.fillText(t.text, x + 10, y + 20);
             });
         }
 
-        // Draw Compliance Box (Google Lens Style)
+        // --- COGNITIVE LAYER: Compliance Box (Google Lens Style) ---
         if (coords.length === 4) {
             let [x, y, w, h] = coords;
             if (isMirrored) x = 1000 - (x + w);
@@ -473,7 +508,7 @@ const App: React.FC = () => {
         }
       }
     }
-  };
+  }, [hazards, isMacroMode, isMirrored, edgeSafetyViolation]);
 
   const handlePreFlightScan = async () => {
       if (!webcamRef.current || !referenceData) return;
@@ -482,10 +517,10 @@ const App: React.FC = () => {
       if (!frame) return;
       try {
           const result = await performPreFlightCheck(apiKey, frame, referenceData);
-          setHazards(result.hazards || []);
+          setHazards(prev => [...prev, ...(result.hazards || [])]);
           if (result.status === 'PASS') {
               setPreFlightStatus('PASS');
-              speak(language === 'en' ? "Inventory verified. Hazards identified. System ready." : "Inventory verified.");
+              speak(language === 'en' ? "Inventory verified. Edge Hazards identified. System ready." : "Inventory verified.");
               setMissingItems([]);
           } else {
               setPreFlightStatus('FAIL');
@@ -549,7 +584,7 @@ const App: React.FC = () => {
             ? `VERIFY STEP COMPLETION: ${sopStepsRef.current[currentVideoStepIndex].text}`
             : protocolText;
 
-        const promises: any[] = [analyzeCompliance(apiKey, imageSrc, referenceData, currentProtocol, language, hazards)];
+        const promises: any[] = [analyzeCompliance(apiKey, imageSrc, referenceData, currentProtocol, language, hazardsRef.current)];
         if (isTranslatingEnv && language !== 'auto') promises.push(performEnvironmentalTranslation(apiKey, imageSrc, language));
         const [complianceRes, translationRes] = await Promise.all(promises);
         setResult(complianceRes);
@@ -561,7 +596,11 @@ const App: React.FC = () => {
                 showInfo(`Environment translated to ${getLangName(language)}.`);
             }
         }
-        drawOverlay(complianceRes.coordinates, complianceRes.status, translationRes || []);
+        
+        // Note: Edge layer loop handles drawing, but we need to pass Gemini coords to it or update state
+        // For simplicity, we trigger a re-render or let the edge loop pick up `result` state next frame.
+        // Actually, since Gemini is slow (0.5Hz) and Edge is fast (30Hz), we should store Gemini results in state
+        // and let the Edge loop render them along with hands.
         
         const isMatch = complianceRes.status === ComplianceStatus.MATCH;
 
@@ -589,17 +628,13 @@ const App: React.FC = () => {
 
         // Supervisor Auto-Advance Logic
         if (isSupervisorMode && isMatch) {
-            // Check if match was found WHILE showing golden frame
             if (showGoldenFrame) {
                  if (currentVideoStepIndex < sopStepsRef.current.length - 1) {
                     const nextIdx = currentVideoStepIndex + 1;
                     setCurrentVideoStepIndex(nextIdx);
-                    // Hide overlay, start playing next segment
                     setShowGoldenFrame(false);
                     setIsVideoPlaying(true);
                     speak("Verified. Playing next step.");
-                    
-                    // Mark current as complete
                     const newSteps = [...sopStepsRef.current];
                     newSteps[currentVideoStepIndex].completed = true;
                     setSopSteps(newSteps);
@@ -618,7 +653,7 @@ const App: React.FC = () => {
       }
     }
     setIsAnalyzing(false);
-  }, [apiKey, referenceData, protocolText, isPrivacyMode, isFrozen, applyPrivacyFilter, isMirrored, language, speak, isTranslatingEnv, hazards, showError, showInfo, isSupervisorMode, currentVideoStepIndex, activeYoutubeUrl, showGoldenFrame]);
+  }, [apiKey, referenceData, protocolText, isPrivacyMode, isFrozen, applyPrivacyFilter, isMirrored, language, speak, isTranslatingEnv, showError, showInfo, isSupervisorMode, currentVideoStepIndex, activeYoutubeUrl, showGoldenFrame]);
 
   // ------------------------------------------------------------------------
   // Audio & Voice Logic
@@ -686,43 +721,6 @@ const App: React.FC = () => {
               } else if (transcript.includes("enhance") || transcript.includes("macro") || transcript.includes("zoom")) {
                   setIsMacroMode(prev => !prev);
                   speak("Switching optic mode.");
-              } else if (transcript.includes("system next step") || transcript.includes("next step") || transcript.includes("confirm step")) {
-                  // Voice advancement
-                  if (activeYoutubeUrl && isSupervisorMode) {
-                       const nextIdx = currentVideoStepIndex + 1;
-                       if (nextIdx < sopStepsRef.current.length) {
-                           setCurrentVideoStepIndex(nextIdx);
-                           speak("Advancing to next video step.");
-                       }
-                  } else {
-                      const steps = sopStepsRef.current;
-                      if (steps.length === 0) showError("No SOP loaded.");
-                      else {
-                          const idx = steps.findIndex(s => !s.completed);
-                          if (idx !== -1) {
-                              const newSteps = [...steps];
-                              newSteps[idx] = { ...newSteps[idx], completed: true };
-                              setSopSteps(newSteps);
-                              speak(`Step ${newSteps[idx].id} completed.`);
-                          }
-                      }
-                  }
-              } else if (transcript.includes("previous step") || transcript.includes("undo step")) {
-                  if (activeYoutubeUrl && isSupervisorMode) {
-                       const prevIdx = Math.max(0, currentVideoStepIndex - 1);
-                       setCurrentVideoStepIndex(prevIdx);
-                       speak("Rewinding to previous step.");
-                  }
-              } else if (transcript.includes("increase opacity")) {
-                  const newVal = Math.min(100, ghostOpacityRef.current + 20);
-                  setGhostOpacity(newVal);
-                  speak(`Opacity ${newVal}%`);
-                  showInfo(`AR Opacity: ${newVal}%`);
-              } else if (transcript.includes("decrease opacity")) {
-                  const newVal = Math.max(0, ghostOpacityRef.current - 20);
-                  setGhostOpacity(newVal);
-                  speak(`Opacity ${newVal}%`);
-                  showInfo(`AR Opacity: ${newVal}%`);
               } else if (transcript.includes("system focus tool") || transcript.includes("focus tool") || transcript.includes("verify tool")) {
                   if (!isMacroMode) setIsMacroMode(true);
                   speak("Engaging Instrument Verifier.");
@@ -734,9 +732,100 @@ const App: React.FC = () => {
       recognitionRef.current = recognition;
       try { recognition.start(); } catch (e) { console.log("Voice start error", e); }
       return () => recognition.stop();
-  }, [isFrozen, language, speak, runComplianceCheck, showError, showInfo, handleToolVerification, isMacroMode, isSupervisorMode, currentVideoStepIndex, activeYoutubeUrl]);
+  }, [isFrozen, language, speak, runComplianceCheck, showError, showInfo, handleToolVerification, isMacroMode]);
 
 
+  // ------------------------------------------------------------------------
+  // Hand Gesture & Edge Safety Logic (The "Fast Path")
+  // ------------------------------------------------------------------------
+  useEffect(() => {
+    // Load HandTrack.js
+    if (!gestureModelLoaded && window.handTrack) {
+        const modelParams = {
+            flipHorizontal: false, 
+            maxNumBoxes: 2,
+            iouThreshold: 0.5,
+            scoreThreshold: 0.7,
+        };
+        window.handTrack.load(modelParams).then((model: any) => {
+            gestureModelRef.current = model;
+            setGestureModelLoaded(true);
+            showInfo("Edge Perception Layer Online. Hand Tracking Active.");
+        });
+    }
+  }, [gestureModelLoaded, showInfo]);
+
+  useEffect(() => {
+    // Edge Loop: Runs rapidly (up to 30FPS) to detect hands and check geofence
+    if (!gestureModelRef.current) return;
+    
+    const runEdgeLoop = async () => {
+        if (webcamRef.current && webcamRef.current.video && webcamRef.current.video.readyState === 4) {
+             const video = webcamRef.current.video;
+             const predictions = await gestureModelRef.current.detect(video);
+             
+             // --- FAST PATH: Safety Geofence Check ---
+             let violation = false;
+             if (predictions.length > 0) {
+                 // Check each hand against hazard zones
+                 predictions.forEach((hand: any) => {
+                     // hand.bbox = [x, y, width, height] relative to video size
+                     const [hx, hy, hw, hh] = hand.bbox;
+                     
+                     // Convert to 1000 scale for comparison with hazards
+                     // Assume video is roughly standard aspect, normalize
+                     const scaleX = 1000 / video.videoWidth;
+                     const scaleY = 1000 / video.videoHeight;
+                     
+                     const hMinX = hx * scaleX;
+                     const hMinY = hy * scaleY;
+                     const hMaxX = (hx + hw) * scaleX;
+                     const hMaxY = (hy + hh) * scaleY;
+
+                     hazardsRef.current.forEach(hazard => {
+                         const [zMinY, zMinX, zMaxY, zMaxX] = hazard.boundingBox;
+                         // AABB Intersection check
+                         if (hMinX < zMaxX && hMaxX > zMinX && hMinY < zMaxY && hMaxY > zMinY) {
+                             violation = true;
+                         }
+                     });
+                 });
+             }
+
+             if (violation && !edgeSafetyViolation) {
+                 if (navigator.vibrate) navigator.vibrate(200);
+                 // Only speak occasionally to avoid spamming
+                 if (Date.now() - lastProcessedTimeRef.current > 3000) {
+                     speak("SAFETY VIOLATION. HAND IN HAZARD ZONE.");
+                     lastProcessedTimeRef.current = Date.now();
+                 }
+             }
+             setEdgeSafetyViolation(violation);
+
+             // Render Edge overlays immediately (don't wait for React state)
+             // We pass current Gemini result coordinates if available
+             const geminiCoords = result?.coordinates || [];
+             const geminiStatus = result?.status || ComplianceStatus.MATCH;
+             const geminiTrans = envTranslations || [];
+             drawOverlay(geminiCoords, geminiStatus, geminiTrans, predictions);
+        }
+        edgeLoopRef.current = requestAnimationFrame(runEdgeLoop);
+    };
+
+    // Start loop if armed or gestures enabled
+    if (isArmed || isGestureEnabled) {
+        edgeLoopRef.current = requestAnimationFrame(runEdgeLoop);
+    } else {
+        cancelAnimationFrame(edgeLoopRef.current);
+        // Clear canvas if stopped
+        const ctx = canvasRef.current?.getContext('2d');
+        if (ctx && canvasRef.current) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
+
+    return () => cancelAnimationFrame(edgeLoopRef.current);
+  }, [isArmed, isGestureEnabled, isMirrored, edgeSafetyViolation, result, envTranslations, drawOverlay, speak]);
+
+  // Slow Path Loop (Gemini)
   useEffect(() => {
       let intervalId: ReturnType<typeof setInterval>;
       if (isArmed && !isFrozen && !isMacroMode) {
@@ -768,72 +857,6 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isCalibrating]);
 
-  // ------------------------------------------------------------------------
-  // Hand Gesture Logic
-  // ------------------------------------------------------------------------
-  useEffect(() => {
-    if (isGestureEnabled && !gestureModelLoaded && window.handTrack) {
-        const modelParams = {
-            flipHorizontal: false, // Webcam handles flip, detection should match raw video
-            maxNumBoxes: 1,
-            iouThreshold: 0.5,
-            scoreThreshold: 0.7,
-        };
-        window.handTrack.load(modelParams).then((model: any) => {
-            gestureModelRef.current = model;
-            setGestureModelLoaded(true);
-            showInfo("Gesture Control Online. Raise hand to interact.");
-            speak("Gesture control enabled.");
-        });
-    }
-  }, [isGestureEnabled, gestureModelLoaded, showInfo, speak]);
-
-  useEffect(() => {
-    if (!isGestureEnabled || !gestureModelRef.current) return;
-    
-    const gestureInterval = setInterval(async () => {
-        if (webcamRef.current && webcamRef.current.video && webcamRef.current.video.readyState === 4) {
-             const predictions = await gestureModelRef.current.detect(webcamRef.current.video);
-             
-             if (predictions.length > 0) {
-                 const now = Date.now();
-                 // Simple Debounce: 2 seconds between actions
-                 if (now - lastGestureTimeRef.current < 2000) return;
-
-                 const prediction = predictions[0]; // Take strongest prediction
-                 // Predictions return class 1: open, 2: closed, etc. 
-                 // We look at the 'label' usually returned by handtrack.js default model
-                 const label = prediction.label; 
-
-                 if (label === 'closed' || label === 'pinch') {
-                      // Action: Scan (Compliance Check)
-                      lastGestureTimeRef.current = now;
-                      speak("Gesture confirmed. Initiating scan.");
-                      runComplianceCheck();
-                 } else if (label === 'open') {
-                      // Action: Toggle Privacy Mode
-                      lastGestureTimeRef.current = now;
-                      setIsPrivacyMode(prev => {
-                          const next = !prev;
-                          speak(next ? "Privacy Shield Active." : "Privacy Shield Deactivated.");
-                          return next;
-                      });
-                 } else if (label === 'point') {
-                      // Action: Freeze Feed
-                      lastGestureTimeRef.current = now;
-                      setIsFrozen(prev => {
-                          const next = !prev;
-                          speak(next ? "Feed Frozen." : "Feed Resumed.");
-                          return next;
-                      });
-                 }
-             }
-        }
-    }, 500); // Check every 500ms to save CPU
-    
-    return () => clearInterval(gestureInterval);
-  }, [isGestureEnabled, runComplianceCheck, speak]);
-
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -843,7 +866,7 @@ const App: React.FC = () => {
         setGhostPos({ x: 0, y: 0 });
         setSopSteps([]);
         setPreFlightStatus('IDLE');
-        setHazards([]);
+        setHazards([STATIC_HAZARD_ZONE]);
         setIsArmed(false);
         setActiveYoutubeUrl(null);
       };
@@ -876,7 +899,7 @@ const App: React.FC = () => {
               setGhostPos({ x: 0, y: 0 });
               setSopSteps([]);
               setPreFlightStatus('IDLE');
-              setHazards([]);
+              setHazards([STATIC_HAZARD_ZONE]);
               setIsArmed(false);
               setActiveYoutubeUrl(null);
               speak("Manual captured. Ready to digitize.");
@@ -1009,28 +1032,30 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
       {/* Header - Material 3 Sticky Surface */}
       <header className="fixed top-0 left-0 right-0 z-50 bg-slate-950/80 backdrop-blur-xl border-b border-white/5 px-6 py-4 flex justify-between items-center transition-all duration-300">
         <div className="flex items-center gap-4">
-          <div className={`p-2.5 rounded-2xl bg-slate-800/50 border border-white/5 ${isArmed ? 'text-red-400 shadow-[0_0_15px_rgba(248,113,113,0.3)]' : 'text-slate-400'}`}>
-             <ShieldAlert size={24} strokeWidth={2} />
+          <div className={`p-2.5 rounded-2xl bg-slate-800/50 border border-white/5 ${isArmed ? 'text-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.3)]' : 'text-slate-400'}`}>
+             <BrainCircuit size={24} strokeWidth={2} />
           </div>
           <div className="flex flex-col">
-            <h1 className="text-xl font-bold tracking-tight text-white font-sans leading-none mb-1">EntropyGuard</h1>
+            <h1 className="text-xl font-bold tracking-tight text-white font-sans leading-none mb-1">EntropyGuard <span className="text-cyan-500 text-xs align-top">V2.1</span></h1>
             <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">System Operational</p>
+                <span className={`w-1.5 h-1.5 rounded-full ${isArmed ? 'bg-cyan-500 animate-pulse' : 'bg-slate-600'}`}></span>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Hybrid Architecture</p>
             </div>
           </div>
         </div>
         
-        {/* Green Score Widget - Center */}
-        {greenScore > 0 && (
-            <div className="hidden lg:flex items-center gap-3 px-5 py-2.5 bg-gradient-to-r from-green-950/50 to-emerald-900/30 border border-green-500/30 rounded-full animate-in fade-in slide-in-from-top-4 shadow-[0_0_15px_rgba(34,197,94,0.15)]">
-                <Leaf size={18} className="text-green-400" />
-                <div className="flex flex-col leading-none">
-                    <span className="text-xs font-bold text-green-300 tracking-wide">{greenScore >= 1000 ? `${(greenScore / 1000).toFixed(1)}kg` : `${greenScore}g`}</span>
-                    <span className="text-[9px] text-green-500 uppercase tracking-wider font-bold">Waste Prevented</span>
-                </div>
+        {/* Architecture Visualization Widget */}
+        <div className="hidden lg:flex items-center gap-1 bg-slate-900/50 border border-white/5 rounded-lg p-1.5">
+            <div className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase transition-all flex items-center gap-2 ${isArmed || isGestureEnabled ? 'bg-cyan-950 text-cyan-400' : 'text-slate-600'}`}>
+                <Activity size={12} className={isArmed || isGestureEnabled ? "animate-pulse" : ""} />
+                Edge (30ms)
             </div>
-        )}
+            <div className="w-px h-4 bg-white/10" />
+            <div className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase transition-all flex items-center gap-2 ${isAnalyzing ? 'bg-indigo-950 text-indigo-400' : 'text-slate-600'}`}>
+                <Sparkles size={12} className={isAnalyzing ? "animate-pulse" : ""} />
+                Cloud (3s)
+            </div>
+        </div>
 
         <div className="flex items-center gap-3">
              <button
@@ -1047,7 +1072,7 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold transition-all border ${isGestureEnabled ? 'bg-purple-900/20 text-purple-400 border-purple-500/30' : 'bg-slate-900 border-white/10 text-slate-400 hover:bg-slate-800 hover:text-white hover:border-white/20'}`}
              >
                  <Hand size={16} />
-                 <span className="hidden md:inline">{isGestureEnabled ? "GESTURES ON" : "GESTURES"}</span>
+                 <span className="hidden md:inline">{isGestureEnabled ? "EDGE TRACKING" : "GESTURES"}</span>
              </button>
 
              <div data-tour-id="voice-indicator" className={`flex items-center gap-2 px-4 py-2.5 rounded-full border border-white/5 bg-slate-900 ${isListening ? 'text-green-400 border-green-900/50' : 'text-slate-500'}`}>
@@ -1337,13 +1362,13 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
         </div>
 
         {/* Right Surface: Live Reality */}
-        <div className="w-full lg:w-2/3 bg-slate-900/50 rounded-[2rem] border border-white/5 flex flex-col overflow-hidden relative shadow-2xl backdrop-blur-sm">
+        <div data-tour-id="video-feed" className="w-full lg:w-2/3 bg-slate-900/50 rounded-[2rem] border border-white/5 flex flex-col overflow-hidden relative shadow-2xl backdrop-blur-sm">
           
           {/* Camera Controls Bar */}
           <div className="absolute top-6 left-6 right-6 z-40 flex items-center justify-between pointer-events-none">
             <div className="pointer-events-auto flex items-center gap-3 bg-slate-950/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/5">
-                <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : isArmed ? "bg-red-500 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.6)]" : "bg-slate-600"}`} />
-                <h2 className="text-xs font-bold text-white tracking-wide uppercase">{isRecording ? "REC" : "Live Feed"}</h2>
+                <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : isArmed ? "bg-cyan-500 animate-pulse shadow-[0_0_10px_rgba(34,211,238,0.6)]" : "bg-slate-600"}`} />
+                <h2 className="text-xs font-bold text-white tracking-wide uppercase">{isRecording ? "REC" : "Dual-Inference Stream"}</h2>
             </div>
 
             <div data-tour-id="ar-controls" className="pointer-events-auto flex items-center gap-2 bg-slate-950/60 backdrop-blur-md p-1.5 rounded-full border border-white/5">
@@ -1364,9 +1389,19 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
           <div className="relative flex-1 bg-black overflow-hidden group">
             {/* Vignette Overlay */}
             <div className="absolute inset-0 pointer-events-none z-30 bg-[radial-gradient(circle,transparent_40%,rgba(0,0,0,0.8)_100%)]" />
+            
+            {/* Safety Violation Overlay (Edge Layer Alert) */}
+            {edgeSafetyViolation && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none border-[6px] border-red-500 shadow-[inset_0_0_50px_rgba(239,68,68,0.5)] animate-pulse">
+                    <div className="bg-red-600 text-white px-8 py-4 rounded-xl font-bold text-2xl tracking-widest flex items-center gap-4 shadow-2xl">
+                        <Siren size={32} className="animate-bounce" />
+                        SAFETY VIOLATION DETECTED
+                    </div>
+                </div>
+            )}
 
             {/* Instrument Verifier Reticle */}
-            {isMacroMode && (
+            {isMacroMode && !edgeSafetyViolation && (
                 <div className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none animate-in fade-in duration-300">
                     <div className={`relative w-72 h-72 transition-all duration-500 ${
                         toolCheckStatus === 'MATCH' ? 'border-green-500 shadow-[0_0_50px_rgba(34,197,94,0.4)]' :
@@ -1452,16 +1487,6 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
                      <div className="bg-slate-900/60 backdrop-blur-md border border-white/10 text-white text-xs px-4 py-2 rounded-full flex items-center gap-2.5 shadow-xl">
                          <ShieldAlert size={14} className="text-green-400" />
                          <span className="font-bold tracking-wide opacity-90">{privacyEngine === PrivacyMode.SIMULATION ? "IDENTITY SIMULATED" : "FACE REDACTION ACTIVE"}</span>
-                     </div>
-                 </div>
-            )}
-
-            {/* Gesture Mode Badge */}
-            {isGestureEnabled && (
-                 <div className="absolute top-24 right-8 z-20">
-                     <div className="bg-purple-900/60 backdrop-blur-md border border-purple-500/20 text-white text-xs px-4 py-2 rounded-full flex items-center gap-2.5 shadow-xl animate-in fade-in slide-in-from-top-2">
-                         <Hand size={14} className="text-purple-300" />
-                         <span className="font-bold tracking-wide opacity-90">HAND TRACKING ACTIVE</span>
                      </div>
                  </div>
             )}
@@ -1569,11 +1594,11 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
                         disabled={referenceData && preFlightStatus !== 'PASS' && !isArmed && !activeYoutubeUrl}
                         className={`group flex items-center gap-3 pl-6 pr-8 py-4 rounded-full font-bold text-sm transition-all shadow-xl hover:shadow-2xl hover:scale-105 active:scale-95 ${
                             isArmed 
-                            ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/20' 
+                            ? 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-cyan-500/20' 
                             : 'bg-gradient-to-r from-[#4E75F6] via-[#A568CC] to-[#DC606B] text-white'
                         }`}
                      >
-                        {isArmed ? <Power size={20} /> : <Sparkles size={20} className={isArmed ? "" : "animate-pulse"} />}
+                        {isArmed ? <Power size={20} /> : <Scan size={20} className={isArmed ? "" : "animate-pulse"} />}
                         <span className="tracking-wide">{isArmed ? "DISARM SYSTEM" : "ARM INTELLIGENCE"}</span>
                      </button>
                  )}
@@ -1659,10 +1684,13 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
                       </div>
                   ) : (
                       toolHistory.map(log => (
-                          <div key={log.id} className="group flex gap-6 p-4 hover:bg-white/5 rounded-2xl transition-all border border-transparent hover:border-white/5 items-center">
-                              <span className="text-slate-500 shrink-0 font-medium">{log.timestamp}</span>
-                              <span className={`px-3 py-1 rounded-full font-bold shrink-0 text-[10px] tracking-wider w-24 text-center ${log.status === 'MATCH' ? 'bg-green-900/30 text-green-300 border border-green-500/20' : 'bg-red-900/30 text-red-300 border border-red-500/20'}`}>{log.status}</span>
-                              <span className="text-slate-300 font-sans text-sm group-hover:text-white transition-colors">{log.instruction}</span>
+                          <div key={log.id} className="group flex gap-6 p-4 hover:bg-slate-800/50 rounded-2xl transition-all border border-transparent hover:border-white/5 items-center">
+                              <span className="text-slate-500 shrink-0 font-medium font-mono">{log.timestamp}</span>
+                              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full font-bold shrink-0 text-[10px] tracking-wider w-32 justify-center border shadow-sm ${log.status === 'MATCH' ? 'bg-green-950/40 text-green-400 border-green-500/30 shadow-green-900/10' : 'bg-red-950/40 text-red-400 border-red-500/30 shadow-red-900/10'}`}>
+                                  {log.status === 'MATCH' ? <CheckCircle size={12} strokeWidth={3} /> : <AlertTriangle size={12} strokeWidth={3} />}
+                                  {log.status}
+                              </div>
+                              <span className="text-slate-300 font-sans text-sm font-medium group-hover:text-white transition-colors flex-1">{log.instruction}</span>
                           </div>
                       ))
                   )

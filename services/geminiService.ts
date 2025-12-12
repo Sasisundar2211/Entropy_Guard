@@ -399,29 +399,22 @@ export const analyzeCompliance = async (
     // Construct Hazard Context
     let hazardInstruction = "";
     if (hazardZones.length > 0) {
-        hazardInstruction = `CRITICAL SAFETY OVERRIDE: The following regions are HAZARD ZONES (High Voltage/Danger): ${JSON.stringify(hazardZones)}. 
-        IF A HAND, TOOL, OR BODY PART ENTERS THESE BOXES, IMMEDIATELY RETURN STATUS: DRIFT, SEVERITY: CRITICAL, AND SCREAM "SAFETY VIOLATION".`;
+        hazardInstruction = `CRITICAL SAFETY CONTEXT: The following regions are HAZARD ZONES (High Voltage/Danger): ${JSON.stringify(hazardZones)}. 
+        Note: The Edge Layer handles rapid spatial violation. The Cognitive Layer (you) should confirm if a safety breach has occurred visually (e.g., hand touching wire).`;
     }
 
     const parts: any[] = [
         {
-            text: `You are an Entropy-Reduction Engine (Global Operations).
+            text: `You are the 'Cognitive Reasoning Layer' of a Hybrid AI Industrial System.
             
-            Language Protocol: ${targetLanguage === 'auto' ? "Detect language from context/visuals, default to English" : `Force output strictly in ${targetLanguage}`}.
+            Task: Zero-Shot Semantic Anomaly Detection.
             
-            Analyze the 'Current Reality' image against the 'Reference Standard' and the safety protocols.
-            
-            Safety Protocols: ${protocolText || "Standard industrial safety alignment required."}
-            
-            ${hazardInstruction}
-            
-            Task:
-            1. Detect if the object matches the reference.
-            2. Check for Safety Violations (Geofencing).
-            3. If there is a defect/misalignment, status is DRIFT.
-            4. If correct, status is MATCH.
-            5. Provide bounding box coordinates.
-            6. correction_voice: A short, authoritative verbal command *TRANSLATED* into the target language defined above.`
+            1. Analyze 'Current Reality' (Image 1) against 'Reference Standard' (Image 2 or Context).
+            2. Perform Visual Question Answering (VQA) to verify compliance with: "${protocolText}".
+            3. ${hazardInstruction}
+            4. If state matches reference: Status = MATCH.
+            5. If deviation/entropy detected: Status = DRIFT. Severity = LOW/MEDIUM/CRITICAL.
+            6. Generate a corrective voice command (max 15 words), translated to: ${targetLanguage === 'auto' ? 'Detected Language' : targetLanguage}.`
         },
         {
             inlineData: {
@@ -445,11 +438,10 @@ export const analyzeCompliance = async (
                     mimeType: mimeType
                 }
             });
-            parts.push({ text: "The second item provided above is the Reference Standard (Image or PDF)." });
+            parts.push({ text: "Reference Standard (Digital Twin)" });
         } else {
              // Handle case where reference is a URL (e.g. YouTube thumbnail) or raw text
-             // We can't easily pass the URL to Gemini via inlineData, so we treat it as context
-             parts.push({ text: `Reference Context URI: ${referenceDataBase64}. Note: If this is a URL, infer standards from general knowledge of the visual subject.`});
+             parts.push({ text: `Reference Context URI: ${referenceDataBase64}. In-Context Learning Mode Active.`});
         }
     }
 
@@ -476,7 +468,7 @@ export const analyzeCompliance = async (
         config: {
             responseMimeType: "application/json",
             responseSchema: responseSchema,
-            systemInstruction: "You are a precise computer vision compliance engine. Output strict JSON."
+            systemInstruction: "You are a multimodal industrial reasoning engine."
         }
     });
 
