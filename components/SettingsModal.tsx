@@ -1,5 +1,6 @@
+
 import React, { useState } from 'react';
-import { X, Key, ShieldCheck, EyeOff, Boxes, Globe, Activity } from 'lucide-react';
+import { X, Key, ShieldCheck, Boxes, Globe, ChevronDown } from 'lucide-react';
 import { PrivacyMode, Language } from '../types';
 
 interface SettingsModalProps {
@@ -11,13 +12,13 @@ interface SettingsModalProps {
   setPrivacyMode: (mode: PrivacyMode) => void;
   isModelLoaded: boolean;
   language: Language;
+  setLanguage: (lang: Language) => void;
   onDetectLanguage: () => void;
   isDetectingLang: boolean;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ 
-  isOpen, onClose, apiKey, setApiKey, privacyMode, setPrivacyMode, isModelLoaded, language,
-  onDetectLanguage, isDetectingLang
+  isOpen, onClose, apiKey, setApiKey, privacyMode, setPrivacyMode, language, setLanguage
 }) => {
   const [inputVal, setInputVal] = useState(apiKey);
 
@@ -29,94 +30,98 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div className="bg-slate-900 border border-slate-700 w-full max-w-md p-6 shadow-2xl relative">
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-500 hover:text-white">
-          <X size={24} />
-        </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+      <div className="bg-[#1E2229] rounded-[2rem] w-full max-w-md p-8 shadow-2xl relative animate-in zoom-in-95 duration-200 border border-[#444746]">
         
-        <div className="flex items-center gap-3 mb-6">
-            <div className="p-3 bg-slate-800 rounded-full text-green-400 border border-green-900">
-                <ShieldCheck size={24} />
+        {/* Header */}
+        <div className="flex justify-between items-center mb-6">
+            <div className="flex items-center gap-3">
+                <div className="p-3 bg-[#0842A0] text-[#D3E3FD] rounded-2xl">
+                    <ShieldCheck size={24} />
+                </div>
+                <h2 className="text-2xl font-medium text-[#E3E3E3]">Configuration</h2>
             </div>
-            <h2 className="text-xl font-bold text-white tracking-widest">SYSTEM CONFIG</h2>
+            <button onClick={onClose} className="p-2 rounded-full hover:bg-[#2B2F36] text-[#C4C7C5] transition-colors">
+                <X size={24} />
+            </button>
         </div>
 
         <div className="space-y-6">
           {/* API Key Section */}
-          <div>
-            <label className="block text-slate-400 text-sm mb-2 font-mono">GEMINI API KEY</label>
+          <div className="bg-[#2B2F36] p-5 rounded-3xl border border-[#444746]">
+            <label className="block text-[#C4C7C5] text-sm font-medium mb-3 ml-1">Gemini API Key</label>
             <div className="relative">
-                <Key className="absolute left-3 top-3 text-slate-500" size={16} />
+                <Key className="absolute left-4 top-3.5 text-[#8E918F]" size={18} />
                 <input 
                     type="password"
                     value={inputVal}
                     onChange={(e) => setInputVal(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-600 text-white pl-10 pr-4 py-2 focus:outline-none focus:border-green-500 font-mono text-sm"
-                    placeholder="sk-..."
+                    className="w-full bg-[#111318] border border-[#444746] text-[#E3E3E3] pl-12 pr-4 py-3 rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#A8C7FA] focus:border-transparent transition-all shadow-inner placeholder-[#444746]"
+                    placeholder="Enter sk- key..."
                 />
             </div>
-            <p className="text-xs text-slate-500 mt-2">
-                Leave empty to run in <span className="text-yellow-500">SIMULATION MODE</span>.
+            <p className="text-xs text-[#8E918F] mt-3 ml-2">
+                Leave empty for <span className="font-bold text-[#D0BCFF]">Simulation Mode</span>
             </p>
           </div>
 
-          {/* Babel Protocol Section */}
+          {/* Language Section */}
           <div>
-              <label className="block text-slate-400 text-sm mb-2 font-mono flex items-center gap-2">
-                  <Globe size={16} /> BABEL PROTOCOL
-              </label>
-              <div className="flex gap-2">
-                  <div className="flex-1 bg-slate-800 border border-slate-600 text-slate-300 px-4 py-3 font-mono text-sm flex justify-between items-center rounded">
-                      <span>DETECTED:</span>
-                      <span className="text-cyan-400 font-bold uppercase">{language === 'auto' ? 'PENDING' : language}</span>
-                  </div>
-                  <button 
-                    onClick={onDetectLanguage} 
-                    disabled={isDetectingLang}
-                    className="px-4 bg-cyan-900/40 hover:bg-cyan-800/40 text-cyan-400 border border-cyan-500/30 rounded flex items-center justify-center transition-colors disabled:opacity-50"
-                  >
-                    {isDetectingLang ? <Activity size={18} className="animate-spin" /> : <Globe size={18} />}
-                  </button>
-              </div>
-              <p className="text-xs text-slate-500 mt-2">
-                  Language is automatically fingerprinted from audio input.
-              </p>
+            <label className="block text-[#C4C7C5] text-sm font-medium mb-3 ml-1">Language Preference</label>
+            <div className="relative">
+                <Globe className="absolute left-4 top-3.5 text-[#8E918F]" size={18} />
+                <select
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value as Language)}
+                    className="w-full bg-[#111318] border border-[#444746] text-[#E3E3E3] pl-12 pr-10 py-3 rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#A8C7FA] focus:border-transparent appearance-none shadow-inner cursor-pointer"
+                >
+                    <option value="auto">Auto-Detect (System Default)</option>
+                    <option value="en">English (US)</option>
+                    <option value="es">Español (Spanish)</option>
+                    <option value="de">Deutsch (German)</option>
+                    <option value="fr">Français (French)</option>
+                    <option value="hi">हिन्दी (Hindi)</option>
+                    <option value="ja">日本語 (Japanese)</option>
+                    <option value="zh">中文 (Chinese)</option>
+                </select>
+                <ChevronDown className="absolute right-4 top-4 text-[#8E918F] pointer-events-none" size={16} />
+            </div>
           </div>
 
           {/* Privacy Config Section */}
-          <div className="border-t border-slate-800 pt-4">
-            <label className="block text-slate-400 text-sm mb-2 font-mono flex items-center gap-2">
-              <EyeOff size={16} /> PRIVACY SHIELD ENGINE
-            </label>
+          <div>
+            <label className="block text-[#C4C7C5] text-sm font-medium mb-3 ml-1">Privacy Engine</label>
             <div className="grid grid-cols-2 gap-3">
               <button 
                 onClick={() => setPrivacyMode(PrivacyMode.SIMULATION)}
-                className={`p-3 rounded border text-xs font-bold transition-all flex flex-col items-center gap-2 ${privacyMode === PrivacyMode.SIMULATION ? 'bg-green-900/40 border-green-500 text-green-400' : 'bg-slate-800 border-slate-700 text-slate-500 hover:border-slate-500'}`}
+                className={`p-4 rounded-3xl text-sm font-medium transition-all flex flex-col items-center gap-2 border-2 ${
+                    privacyMode === PrivacyMode.SIMULATION 
+                    ? 'bg-[#374939] border-[#374939] text-[#C4EED0]' 
+                    : 'bg-[#1E2229] border-[#444746] text-[#C4C7C5] hover:bg-[#2B2F36]'
+                }`}
               >
-                <Boxes size={20} />
-                SIMULATION
+                <Boxes size={24} />
+                Simulation
               </button>
               <button 
                 onClick={() => setPrivacyMode(PrivacyMode.REAL_AI)}
-                className={`p-3 rounded border text-xs font-bold transition-all flex flex-col items-center gap-2 ${privacyMode === PrivacyMode.REAL_AI ? 'bg-indigo-900/40 border-indigo-500 text-indigo-400' : 'bg-slate-800 border-slate-700 text-slate-500 hover:border-slate-500'}`}
+                className={`p-4 rounded-3xl text-sm font-medium transition-all flex flex-col items-center gap-2 border-2 ${
+                    privacyMode === PrivacyMode.REAL_AI 
+                    ? 'bg-[#4A4458] border-[#4A4458] text-[#E8DEF8]' 
+                    : 'bg-[#1E2229] border-[#444746] text-[#C4C7C5] hover:bg-[#2B2F36]'
+                }`}
               >
-                <ShieldCheck size={20} />
-                REAL AI (FACE-API)
+                <ShieldCheck size={24} />
+                Real AI
               </button>
             </div>
-            {privacyMode === PrivacyMode.REAL_AI && (
-              <p className={`text-xs mt-2 text-right ${isModelLoaded ? 'text-green-500' : 'text-yellow-500 animate-pulse'}`}>
-                {isModelLoaded ? "AI MODELS LOADED & READY" : "DOWNLOADING NEURAL NETS..."}
-              </p>
-            )}
           </div>
 
           <button 
             onClick={handleSave}
-            className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 transition-colors duration-200 mt-2"
+            className="w-full bg-[#A8C7FA] hover:bg-[#85b5f8] text-[#062E6F] font-semibold text-lg py-3.5 px-6 rounded-full transition-colors shadow-lg shadow-black/20"
           >
-            CONFIRM CONFIGURATION
+            Save Changes
           </button>
         </div>
       </div>
