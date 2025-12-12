@@ -17,85 +17,32 @@ export enum PrivacyMode {
 
 export type Language = 'auto' | 'en' | 'es' | 'de' | 'hi' | 'zh' | 'fr' | 'ja';
 
-export type ARVoiceCommand = 
-  | 'MOVE_LEFT' | 'MOVE_RIGHT' | 'MOVE_UP' | 'MOVE_DOWN' 
-  | 'ROTATE_CW' | 'ROTATE_CCW' 
-  | 'SCALE_UP' | 'SCALE_DOWN' 
-  | 'RESET' | 'UNKNOWN';
-
 export interface BoxCoordinates {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+  ymin: number;
+  xmin: number;
+  ymax: number;
+  xmax: number;
 }
 
-export interface PPEResponse {
-  compliant: boolean;
-  missing_items: string[];
-  message: string;
-}
-
-export interface ComplianceResponse {
+export interface EntropyAnalysisResult {
   status: ComplianceStatus;
-  drift_severity: DriftSeverity;
-  coordinates: number[]; // [x, y, width, height] 0-1000 scale
-  correction_voice: string;
-}
-
-export interface TranslationOverlay {
-  text: string;
-  boundingBox: number[]; // [ymin, xmin, ymax, xmax] 0-1000 scale
-}
-
-export interface AuditLogEntry {
-  id: string;
-  timestamp: string;
   severity: DriftSeverity;
-  reasoning: string;
-  reportUrl?: string; // Link to PDF
+  message: string;
+  // Bounding box for the error/anomaly in the LIVE FEED (0-1000 scale)
+  boundingBox?: number[]; 
+  timestamp: string;
 }
 
-export interface ToolVerificationLogEntry {
-    id: string;
-    timestamp: string;
-    status: 'MATCH' | 'MISMATCH';
-    instruction: string;
+export interface ReferenceData {
+  type: 'IMAGE' | 'PDF' | 'TEXT';
+  content: string; // Base64 or raw text
+  name: string;
+  mimeType?: string;
 }
 
-export interface SOPStep {
-  id: number;
-  text: string;
-  completed: boolean;
-  timestamp?: number; // Seconds from start of video
-  tools?: string[];
-}
-
-export interface MasterSOPStep extends SOPStep {
-    frameData: string; // Base64 image of the step
-}
-
+// Keeping legacy types for compatibility with unused components if needed, 
+// though App.tsx is fully rewritten.
 export interface HazardZone {
   label: string;
-  boundingBox: number[]; // [ymin, xmin, ymax, xmax] 0-1000 scale
-}
-
-export interface PreFlightResult {
-    status: 'PASS' | 'FAIL';
-    missing_items: string[];
-    detected_items: string[];
-    hazards: HazardZone[];
-}
-
-export interface ToolVerificationResult {
-    status: 'MATCH' | 'MISMATCH';
-    instruction: string;
-}
-
-export interface AppState {
-  apiKey: string;
-  referenceImage: string | null;
-  protocolText: string;
-  isAnalyzing: boolean;
-  lastResult: ComplianceResponse | null;
+  boundingBox: number[]; 
 }
