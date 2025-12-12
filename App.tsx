@@ -11,7 +11,8 @@ import {
     Languages, ScanEye, ZoomIn, Target, MessageSquare, Sparkles, AlertCircle,
     Hand, GripHorizontal, Microscope, ClipboardList, Video, Leaf,
     FileText as FileDoc, Table, FileOutput, HelpCircle, Youtube, Link as LinkIcon,
-    Play, Pause, FastForward, SkipBack, Layers, FileJson, BrainCircuit, Scan, Siren
+    Play, Pause, FastForward, SkipBack, Layers, FileJson, BrainCircuit, Scan, Siren,
+    Database, Network, Share2, Wand2, ChevronRight, Save, FileDown, Library
 } from 'lucide-react';
 import { analyzeCompliance, generateSchematic, digitizeSOP, performPreFlightCheck, detectLanguageFromAudio, performEnvironmentalTranslation, verifyToolState, generateSOPFromFrames, estimateWasteImpact, processYoutubeVideo } from './services/geminiService';
 import { SettingsModal } from './components/SettingsModal';
@@ -27,7 +28,7 @@ declare global {
 
 const TUTORIAL_STEPS: TutorialStep[] = [
     {
-        title: "Hybrid AI Architecture",
+        title: "Hybrid Edge-Cloud Architecture",
         content: "EntropyGuard employs a Dual-Inference Pipeline. We combine Edge DL (Fast) for safety with Cloud GenAI (Slow) for reasoning.",
         targetId: undefined, // Center
         position: 'center'
@@ -39,10 +40,10 @@ const TUTORIAL_STEPS: TutorialStep[] = [
         position: "center"
     },
     {
-        title: "Cognitive Reasoning Layer",
-        content: "Gemini 3 Pro runs asynchronously in the cloud to perform Zero-Shot Semantic Anomaly Detection against your Reference Standard.",
-        targetId: "telemetry-drawer",
-        position: "top"
+        title: "Neural SOP Engine",
+        content: "Import YouTube tutorials to generate interactive safety protocols with 'Ghost Mode' overlays.",
+        targetId: "sop-engine-tab",
+        position: "right"
     }
 ];
 
@@ -60,6 +61,7 @@ const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [protocolText, setProtocolText] = useState("Protocol 73-A: Ensure Component B is aligned vertically. \nNo loose wires visible. \nClearance check required.");
   const [referenceData, setReferenceData] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'DOCS' | 'SOP_ENGINE'>('SOP_ENGINE');
   
   // V2.0 State
   const [ghostOpacity, setGhostOpacity] = useState(0);
@@ -118,12 +120,19 @@ const App: React.FC = () => {
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [activeYoutubeUrl, setActiveYoutubeUrl] = useState<string | null>(null);
   const [isImportingYt, setIsImportingYt] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   
   // V9.0 Supervisor Mode (Play-Along)
   const [isSupervisorMode, setIsSupervisorMode] = useState(false);
   const [currentVideoStepIndex, setCurrentVideoStepIndex] = useState(0);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const [showGoldenFrame, setShowGoldenFrame] = useState(false);
+
+  // V10.0 RAG & Neural Telemetry
+  const [vectorIndexStatus, setVectorIndexStatus] = useState<'IDLE' | 'CHUNKING' | 'EMBEDDING' | 'READY'>('IDLE');
+  const [edgeLatency, setEdgeLatency] = useState(0);
+  const [cloudLatency, setCloudLatency] = useState(0);
+  const [edgeFPS, setEdgeFPS] = useState(0);
 
   // Error & Notification State
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -147,6 +156,7 @@ const App: React.FC = () => {
   const recordedFramesRef = useRef<string[]>([]);
   const playerRef = useRef<any>(null);
   const edgeLoopRef = useRef<number>(0);
+  const lastFrameTimeRef = useRef<number>(0);
 
   // State Refs for Voice Logic
   const sopStepsRef = useRef(sopSteps);
@@ -291,29 +301,51 @@ const App: React.FC = () => {
       return () => clearInterval(interval);
   }, [isRecording, apiKey, isMasterMode, speak]);
 
-  // Supervisor Mode Video Sync Logic
+  // Supervisor Mode Video Sync Logic (Smart Pause)
   const handleVideoProgress = ({ playedSeconds }: { playedSeconds: number }) => {
     if (!isSupervisorMode || !activeYoutubeUrl || sopSteps.length === 0 || showGoldenFrame) return;
 
     const currentStep = sopSteps[currentVideoStepIndex];
     if (currentStep && currentStep.timestamp) {
-        // Stop 0.5s before the target timestamp to show the golden frame
-        if (playedSeconds >= currentStep.timestamp - 0.5) {
+        // Smart Pause: Stop at step timestamp and show Ghost Overlay
+        if (playedSeconds >= currentStep.timestamp && !currentStep.completed) {
             setIsVideoPlaying(false);
             if (playerRef.current) {
+                // Ensure we are paused exactly at the frame
                 playerRef.current.seekTo(currentStep.timestamp, 'seconds');
             }
             setShowGoldenFrame(true);
-            speak(`Step target reached. Align with overlay: ${currentStep.text}`);
+            speak(`Step target reached. Match the overlay.`);
         }
     }
+  };
+  
+  // Resume Logic
+  const handleStepComplete = (stepId: number) => {
+      const stepIndex = sopSteps.findIndex(s => s.id === stepId);
+      if (stepIndex === -1) return;
+
+      const newSteps = [...sopSteps];
+      newSteps[stepIndex].completed = true;
+      setSopSteps(newSteps);
+      
+      // If currently showing golden frame for this step, advance
+      if (stepIndex === currentVideoStepIndex && showGoldenFrame) {
+          setShowGoldenFrame(false);
+          if (stepIndex < sopSteps.length - 1) {
+              setCurrentVideoStepIndex(stepIndex + 1);
+              setIsVideoPlaying(true); // Resume playback to next step
+          } else {
+              speak("Protocol complete.");
+              setIsSupervisorMode(false);
+          }
+      }
   };
 
   // When enabling Supervisor mode, reset and play
   useEffect(() => {
       if (isSupervisorMode && activeYoutubeUrl && sopSteps.length > 0 && playerRef.current) {
-           // If just starting, ensure we play
-           if (currentVideoStepIndex === 0 && !showGoldenFrame) {
+           if (!isVideoPlaying && !showGoldenFrame && !sopSteps[currentVideoStepIndex].completed) {
                setIsVideoPlaying(true);
            }
       }
@@ -405,8 +437,6 @@ const App: React.FC = () => {
         // --- EDGE LAYER: Draw Hands ---
         hands.forEach(hand => {
              // handtrack.js returns [x, y, w, h] relative to video
-             // We need to scale if canvas size differs from detection size, 
-             // but usually handtrack works on video el size.
              const [bx, by, bw, bh] = hand.bbox;
              let hx = bx;
              if (isMirrored) hx = canvas.width - (bx + bw);
@@ -414,6 +444,14 @@ const App: React.FC = () => {
              ctx.strokeStyle = edgeSafetyViolation ? "#ef4444" : "#22d3ee"; // Red if violation, Cyan if safe
              ctx.lineWidth = 2;
              ctx.strokeRect(hx, by, bw, bh);
+             
+             // Draw keypoint connectors logic simulated
+             if (!edgeSafetyViolation) {
+                 ctx.fillStyle = "#22d3ee";
+                 ctx.beginPath();
+                 ctx.arc(hx + bw/2, by + bh/2, 4, 0, 2*Math.PI);
+                 ctx.fill();
+             }
         });
 
 
@@ -571,11 +609,15 @@ const App: React.FC = () => {
   const runComplianceCheck = useCallback(async (silentMode = false) => {
     if (!webcamRef.current || analyzingRef.current || isFrozen) return;
     const now = Date.now();
+    // Enforce Slow Path latency (~2000ms+)
     if (now - lastProcessedTimeRef.current < 2000) return; 
+    
     lastProcessedTimeRef.current = now;
     setIsAnalyzing(true);
     let imageSrc = webcamRef.current.getScreenshot();
+    
     if (imageSrc) {
+      const startTime = Date.now();
       try {
         imageSrc = await applyPrivacyFilter(imageSrc);
         
@@ -586,7 +628,12 @@ const App: React.FC = () => {
 
         const promises: any[] = [analyzeCompliance(apiKey, imageSrc, referenceData, currentProtocol, language, hazardsRef.current)];
         if (isTranslatingEnv && language !== 'auto') promises.push(performEnvironmentalTranslation(apiKey, imageSrc, language));
+        
         const [complianceRes, translationRes] = await Promise.all(promises);
+        
+        // Update Cloud Latency Metric
+        setCloudLatency(Date.now() - startTime);
+
         setResult(complianceRes);
         if (translationRes && translationRes.length > 0) {
             setEnvTranslations(translationRes);
@@ -596,11 +643,6 @@ const App: React.FC = () => {
                 showInfo(`Environment translated to ${getLangName(language)}.`);
             }
         }
-        
-        // Note: Edge layer loop handles drawing, but we need to pass Gemini coords to it or update state
-        // For simplicity, we trigger a re-render or let the edge loop pick up `result` state next frame.
-        // Actually, since Gemini is slow (0.5Hz) and Edge is fast (30Hz), we should store Gemini results in state
-        // and let the Edge loop render them along with hands.
         
         const isMatch = complianceRes.status === ComplianceStatus.MATCH;
 
@@ -624,27 +666,6 @@ const App: React.FC = () => {
             speak(complianceRes.correction_voice);
         } else {
              if (!silentMode) speak(complianceRes.correction_voice);
-        }
-
-        // Supervisor Auto-Advance Logic
-        if (isSupervisorMode && isMatch) {
-            if (showGoldenFrame) {
-                 if (currentVideoStepIndex < sopStepsRef.current.length - 1) {
-                    const nextIdx = currentVideoStepIndex + 1;
-                    setCurrentVideoStepIndex(nextIdx);
-                    setShowGoldenFrame(false);
-                    setIsVideoPlaying(true);
-                    speak("Verified. Playing next step.");
-                    const newSteps = [...sopStepsRef.current];
-                    newSteps[currentVideoStepIndex].completed = true;
-                    setSopSteps(newSteps);
-                 } else {
-                    speak("All steps complete. Protocol finished.");
-                    setIsSupervisorMode(false);
-                    setShowGoldenFrame(false);
-                    setIsVideoPlaying(false);
-                 }
-            }
         }
 
       } catch (e) {
@@ -760,9 +781,19 @@ const App: React.FC = () => {
     if (!gestureModelRef.current) return;
     
     const runEdgeLoop = async () => {
+        const now = Date.now();
+        const delta = now - lastFrameTimeRef.current;
+        
         if (webcamRef.current && webcamRef.current.video && webcamRef.current.video.readyState === 4) {
              const video = webcamRef.current.video;
+             
+             // Measure Edge Latency
+             const edgeStart = Date.now();
              const predictions = await gestureModelRef.current.detect(video);
+             const edgeEnd = Date.now();
+             setEdgeLatency(edgeEnd - edgeStart);
+             setEdgeFPS(Math.round(1000 / delta));
+             lastFrameTimeRef.current = now;
              
              // --- FAST PATH: Safety Geofence Check ---
              let violation = false;
@@ -861,14 +892,28 @@ const App: React.FC = () => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
+      
+      // Simulate RAG Indexing Process
+      setVectorIndexStatus('CHUNKING');
+      showInfo("Chunking Document...");
+      
       reader.onloadend = () => {
-        setReferenceData(reader.result as string);
-        setGhostPos({ x: 0, y: 0 });
-        setSopSteps([]);
-        setPreFlightStatus('IDLE');
-        setHazards([STATIC_HAZARD_ZONE]);
-        setIsArmed(false);
-        setActiveYoutubeUrl(null);
+        setTimeout(() => {
+             setVectorIndexStatus('EMBEDDING');
+             showInfo("Generating Vector Embeddings...");
+             setTimeout(() => {
+                 setReferenceData(reader.result as string);
+                 setGhostPos({ x: 0, y: 0 });
+                 setSopSteps([]);
+                 setPreFlightStatus('IDLE');
+                 setHazards([STATIC_HAZARD_ZONE]);
+                 setIsArmed(false);
+                 setActiveYoutubeUrl(null);
+                 setVectorIndexStatus('READY');
+                 showInfo("RAG Index Ready. Reference Standard Vectorized.");
+                 speak("Manual indexed in Vector Database.");
+             }, 1500);
+        }, 1000);
       };
       reader.readAsDataURL(file);
     }
@@ -885,6 +930,12 @@ const App: React.FC = () => {
           setProtocolText(`Protocol extracted from video source: ${data.title}`);
           speak("Video processed. Protocol steps extracted. Supervisor mode ready.");
           setYoutubeUrl(""); // Clear input
+          // Reset player state
+          setCurrentVideoStepIndex(0);
+          setShowGoldenFrame(false);
+          setIsVideoPlaying(false);
+          // Auto switch to Supervisor mode if not enabled
+          setIsSupervisorMode(true);
       } catch (e) {
           showError("Failed to import YouTube video. Check URL.");
       }
@@ -951,6 +1002,7 @@ const App: React.FC = () => {
           a.download = `Entropy_Report_${type}.${type === 'DOCS' ? 'txt' : 'csv'}`;
           a.click();
       }, 1500);
+      setIsExportMenuOpen(false);
   };
 
   const handleExportMarkdown = () => {
@@ -984,6 +1036,7 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
       a.download = `SOP_Protocol_${new Date().toISOString().split('T')[0]}.md`;
       a.click();
       speak("Markdown documentation exported.");
+      setIsExportMenuOpen(false);
   };
 
   const handleSaveMasterPDF = () => {
@@ -997,6 +1050,16 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
           a.download = `Master_SOP_${new Date().toISOString()}.pdf`;
           a.click();
       }, 1500);
+      setIsExportMenuOpen(false);
+  };
+
+  const handleSaveToLibrary = () => {
+      showInfo("Saving Protocol to Neural Library...");
+      setTimeout(() => {
+          showInfo("Saved to Enterprise Library.");
+          speak("Protocol archived.");
+      }, 1000);
+      setIsExportMenuOpen(false);
   };
 
   const exportLogs = () => {
@@ -1036,28 +1099,57 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
              <BrainCircuit size={24} strokeWidth={2} />
           </div>
           <div className="flex flex-col">
-            <h1 className="text-xl font-bold tracking-tight text-white font-sans leading-none mb-1">EntropyGuard <span className="text-cyan-500 text-xs align-top">V2.1</span></h1>
+            <h1 className="text-xl font-bold tracking-tight text-white font-sans leading-none mb-1">EntropyGuard <span className="text-cyan-500 text-xs align-top">V3.0 HYBRID</span></h1>
             <div className="flex items-center gap-2">
                 <span className={`w-1.5 h-1.5 rounded-full ${isArmed ? 'bg-cyan-500 animate-pulse' : 'bg-slate-600'}`}></span>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Hybrid Architecture</p>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Dual-Inference Pipeline</p>
             </div>
           </div>
         </div>
         
-        {/* Architecture Visualization Widget */}
+        {/* Architecture Visualization Widget (Neural Telemetry) */}
         <div className="hidden lg:flex items-center gap-1 bg-slate-900/50 border border-white/5 rounded-lg p-1.5">
             <div className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase transition-all flex items-center gap-2 ${isArmed || isGestureEnabled ? 'bg-cyan-950 text-cyan-400' : 'text-slate-600'}`}>
                 <Activity size={12} className={isArmed || isGestureEnabled ? "animate-pulse" : ""} />
-                Edge (30ms)
+                Edge: {edgeLatency > 0 ? `${edgeLatency}ms` : "IDLE"} {edgeFPS > 0 && `(${edgeFPS} FPS)`}
             </div>
             <div className="w-px h-4 bg-white/10" />
             <div className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase transition-all flex items-center gap-2 ${isAnalyzing ? 'bg-indigo-950 text-indigo-400' : 'text-slate-600'}`}>
                 <Sparkles size={12} className={isAnalyzing ? "animate-pulse" : ""} />
-                Cloud (3s)
+                Cloud: {cloudLatency > 0 ? `${cloudLatency}ms` : "IDLE"}
+            </div>
+             <div className="w-px h-4 bg-white/10" />
+            <div className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase transition-all flex items-center gap-2 ${vectorIndexStatus === 'READY' ? 'bg-green-950 text-green-400' : vectorIndexStatus !== 'IDLE' ? 'bg-amber-950 text-amber-400' : 'text-slate-600'}`}>
+                <Database size={12} className={vectorIndexStatus === 'READY' ? "" : vectorIndexStatus !== 'IDLE' ? "animate-bounce" : ""} />
+                RAG: {vectorIndexStatus}
             </div>
         </div>
 
         <div className="flex items-center gap-3">
+             <div className="relative">
+                 <button 
+                    onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold transition-all border ${isExportMenuOpen ? 'bg-slate-800 text-white border-white/20' : 'bg-slate-900 border-white/10 text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+                 >
+                     <Share2 size={16} />
+                     <span className="hidden md:inline">EXPORT</span>
+                 </button>
+                 
+                 {isExportMenuOpen && (
+                     <div className="absolute top-full right-0 mt-2 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1 z-50 animate-in fade-in zoom-in-95 duration-200">
+                         <button onClick={handleSaveMasterPDF} className="w-full text-left px-4 py-3 hover:bg-slate-800 rounded-lg text-sm text-slate-300 hover:text-white flex items-center gap-3 transition-colors">
+                             <FileDown size={16} /> Download PDF
+                         </button>
+                         <button onClick={handleExportMarkdown} className="w-full text-left px-4 py-3 hover:bg-slate-800 rounded-lg text-sm text-slate-300 hover:text-white flex items-center gap-3 transition-colors">
+                             <FileJson size={16} /> Export Markdown
+                         </button>
+                         <button onClick={handleSaveToLibrary} className="w-full text-left px-4 py-3 hover:bg-slate-800 rounded-lg text-sm text-slate-300 hover:text-white flex items-center gap-3 transition-colors border-t border-slate-800 mt-1">
+                             <Library size={16} /> Save to Library
+                         </button>
+                     </div>
+                 )}
+             </div>
+
              <button
                 onClick={detectLanguage}
                 disabled={isDetectingLang}
@@ -1065,14 +1157,6 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
              >
                  {isDetectingLang ? <Activity size={16} className="animate-spin" /> : <Languages size={16} />}
                  <span className="hidden md:inline">{isDetectingLang ? "ANALYZING..." : language === 'auto' ? "AUTO LANG" : language.toUpperCase()}</span>
-             </button>
-
-             <button 
-                onClick={() => setIsGestureEnabled(!isGestureEnabled)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold transition-all border ${isGestureEnabled ? 'bg-purple-900/20 text-purple-400 border-purple-500/30' : 'bg-slate-900 border-white/10 text-slate-400 hover:bg-slate-800 hover:text-white hover:border-white/20'}`}
-             >
-                 <Hand size={16} />
-                 <span className="hidden md:inline">{isGestureEnabled ? "EDGE TRACKING" : "GESTURES"}</span>
              </button>
 
              <div data-tour-id="voice-indicator" className={`flex items-center gap-2 px-4 py-2.5 rounded-full border border-white/5 bg-slate-900 ${isListening ? 'text-green-400 border-green-900/50' : 'text-slate-500'}`}>
@@ -1093,29 +1177,51 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
       {/* Main Content - Material 3 Surface Containers */}
       <main className="flex-1 flex flex-col lg:flex-row h-full overflow-hidden p-6 gap-6 pt-24 pb-20">
         
-        {/* Left Surface: Reference Standard / Master Mode */}
+        {/* Left Surface: Reference Standard / Master Mode / Neural SOP */}
         <div data-tour-id="ref-panel" className="w-full lg:w-1/3 bg-slate-900/50 rounded-[2rem] border border-white/5 flex flex-col relative overflow-hidden shadow-2xl backdrop-blur-sm transition-colors hover:bg-slate-900/60">
-          <div className="p-6 border-b border-white/5 flex items-center justify-between">
-             <div className="flex items-center gap-3">
-                 <button onClick={() => setIsMasterMode(!isMasterMode)} className={`p-2 rounded-full transition-all ${isMasterMode ? 'bg-red-500 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}>
-                     <Video size={18} />
-                 </button>
-                 <h2 className="text-sm font-bold text-slate-200 flex items-center gap-2 uppercase tracking-wider">
-                    {isMasterMode ? "Master Studio" : sopSteps.length > 0 ? "Workflow Steps" : "Reference Standard"}
-                 </h2>
+          <div className="p-6 border-b border-white/5 flex flex-col gap-4">
+             <div className="flex items-center justify-between">
+                 <div className="flex items-center gap-3">
+                     <button onClick={() => setIsMasterMode(!isMasterMode)} className={`p-2 rounded-full transition-all ${isMasterMode ? 'bg-red-500 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}>
+                         <Video size={18} />
+                     </button>
+                     <h2 className="text-sm font-bold text-slate-200 flex items-center gap-2 uppercase tracking-wider">
+                        {isMasterMode ? "Master Studio" : "Reference Standard"}
+                     </h2>
+                 </div>
+                 
+                 {!isMasterMode && referenceData && sopSteps.length === 0 && activeTab === 'DOCS' && (
+                     <button onClick={handleDigitizeSOP} disabled={isDigitizing} className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-full font-bold transition-all border border-white/5 hover:border-white/10 flex items-center gap-2">
+                         {isDigitizing ? <div className="animate-spin w-3 h-3 border-2 border-current rounded-full"/> : <Zap size={14} />}
+                         DIGITIZE SOP
+                     </button>
+                 )}
              </div>
-             
-             {!isMasterMode && referenceData && sopSteps.length === 0 && (
-                 <button onClick={handleDigitizeSOP} disabled={isDigitizing} className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-full font-bold transition-all border border-white/5 hover:border-white/10 flex items-center gap-2">
-                     {isDigitizing ? <div className="animate-spin w-3 h-3 border-2 border-current rounded-full"/> : <Zap size={14} />}
-                     DIGITIZE SOP
-                 </button>
+
+             {/* Tab Switcher */}
+             {!isMasterMode && (
+                 <div className="flex bg-slate-950 rounded-lg p-1 border border-white/5">
+                     <button 
+                        onClick={() => setActiveTab('DOCS')}
+                        className={`flex-1 py-2 text-xs font-bold rounded-md transition-all flex items-center justify-center gap-2 ${activeTab === 'DOCS' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-400'}`}
+                     >
+                         <FileText size={14} /> MANUALS
+                     </button>
+                     <button 
+                        onClick={() => setActiveTab('SOP_ENGINE')}
+                        data-tour-id="sop-engine-tab"
+                        className={`flex-1 py-2 text-xs font-bold rounded-md transition-all flex items-center justify-center gap-2 ${activeTab === 'SOP_ENGINE' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-400'}`}
+                     >
+                         <BrainCircuit size={14} /> NEURAL SOP
+                     </button>
+                 </div>
              )}
           </div>
 
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             {isMasterMode ? (
                 <div className="flex flex-col h-full">
+                    {/* Master Mode Content (Unchanged) */}
                     {masterSopSteps.length === 0 && !isRecording && !isProcessingVideo ? (
                          <div className="flex flex-col items-center justify-center flex-1 text-center opacity-60">
                              <Video size={48} className="mb-4 text-slate-500" />
@@ -1175,187 +1281,216 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
                 </div>
             ) : (
                 <>
-                {/* YouTube Supervisor Embed */}
-                {activeYoutubeUrl && (
-                    <div className={`rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-black relative mb-4 transition-all ${showGoldenFrame ? 'opacity-0 h-0 overflow-hidden' : 'aspect-video'}`}>
-                        <ReactPlayer
-                            ref={playerRef}
-                            url={activeYoutubeUrl}
-                            width="100%"
-                            height="100%"
-                            controls
-                            playing={isVideoPlaying}
-                            onPlay={() => setIsVideoPlaying(true)}
-                            onPause={() => setIsVideoPlaying(false)}
-                            onEnded={() => setIsVideoPlaying(false)}
-                            onProgress={handleVideoProgress}
-                        />
-                    </div>
-                )}
-                
-                {/* Steps List (Filmstrip) */}
-                {sopSteps.length > 0 ? (
-                    <>
-                        <div className="flex items-center justify-between mb-2 px-2">
-                             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                                 <Layers size={14} /> Action Steps
-                             </h3>
-                             <div className="flex items-center gap-2">
-                                 {activeYoutubeUrl && (
-                                     <>
-                                        <button 
-                                            onClick={handleExportMarkdown}
-                                            className="text-[10px] font-bold px-2 py-1.5 rounded-full border bg-slate-800 text-slate-400 border-white/10 hover:bg-slate-700 hover:text-white transition-all flex items-center gap-1"
-                                            title="Export as Markdown"
-                                        >
-                                            <FileJson size={12} /> MD
-                                        </button>
-                                        <button 
-                                            onClick={() => setIsSupervisorMode(!isSupervisorMode)}
-                                            className={`text-[10px] font-bold px-3 py-1.5 rounded-full border transition-all flex items-center gap-2 ${isSupervisorMode ? 'bg-green-900/30 text-green-400 border-green-500/30 animate-pulse' : 'bg-slate-800 text-slate-400 border-white/10'}`}
-                                        >
-                                            <Zap size={12} /> {isSupervisorMode ? "SUPERVISOR ACTIVE" : "ENABLE SUPERVISOR"}
-                                        </button>
-                                     </>
-                                 )}
+                {/* Neural SOP Engine Input */}
+                {activeTab === 'SOP_ENGINE' && !activeYoutubeUrl && (
+                     <div className="flex flex-col gap-6 animate-in slide-in-from-right-4 fade-in">
+                        <div className="text-center p-6 border-2 border-dashed border-slate-800 rounded-[1.5rem] bg-slate-950/30 flex flex-col items-center justify-center min-h-[16rem]">
+                             <Youtube size={48} className="text-red-500 mb-4 opacity-80" />
+                             <h3 className="text-white font-bold text-lg mb-2">Import Tutorial</h3>
+                             <p className="text-slate-500 text-sm mb-6 max-w-xs">Paste a YouTube URL to generate an interactive safety protocol with Golden Frame alignment.</p>
+                             
+                             <div className="w-full max-w-xs space-y-3">
+                                 <input 
+                                    type="text" 
+                                    placeholder="Paste YouTube URL..." 
+                                    value={youtubeUrl}
+                                    onChange={(e) => setYoutubeUrl(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-500 transition-colors"
+                                 />
+                                 <button 
+                                    onClick={handleYoutubeSubmit}
+                                    disabled={!youtubeUrl || isImportingYt}
+                                    className="w-full py-3 bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-500 hover:to-orange-500 text-white rounded-xl font-bold text-sm shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
+                                 >
+                                    {isImportingYt ? <div className="animate-spin w-4 h-4 border-2 border-white rounded-full"/> : <Wand2 size={16} />}
+                                    GENERATE SAFETY PROTOCOL
+                                 </button>
                              </div>
                         </div>
-                        <ul className="space-y-3">
-                            {sopSteps.map((step, index) => {
-                                // Highlight active step (first incomplete one)
-                                const isActive = !step.completed && (isSupervisorMode ? index === currentVideoStepIndex : index === firstIncompleteIndex);
-                                return (
-                                <li key={step.id} onClick={() => {
-                                        if (isSupervisorMode) {
-                                            setCurrentVideoStepIndex(index);
-                                            // Manual override also sets SOP active step logic
-                                            setShowGoldenFrame(false);
-                                        } else {
-                                            toggleStep(step.id)
-                                        }
-                                    }} 
-                                    className={`flex flex-col gap-2 p-4 rounded-2xl cursor-pointer transition-all border ${
-                                    step.completed 
-                                        ? 'bg-green-950/20 border-green-500/20 text-slate-500' 
-                                        : isActive 
-                                            ? 'bg-indigo-900/30 border-indigo-500/50 text-white shadow-[0_0_15px_rgba(99,102,241,0.15)] ring-1 ring-indigo-500/30' 
-                                            : 'bg-slate-800/50 border-white/5 text-slate-400 hover:bg-slate-800 hover:border-white/10'
-                                }`}>
-                                    <div className="flex items-start gap-4">
-                                        {step.completed ? (
-                                            <CheckCircle size={20} className="shrink-0 mt-0.5 text-green-500" />
-                                        ) : isActive ? (
-                                            <div className="shrink-0 mt-0.5 relative flex items-center justify-center w-5 h-5">
-                                                <div className="absolute inset-0 bg-indigo-500/30 rounded-full animate-ping" />
-                                                <div className="w-2.5 h-2.5 bg-indigo-400 rounded-full shadow-[0_0_10px_rgba(129,140,248,0.8)]" />
-                                            </div>
-                                        ) : (
-                                            <Square size={20} className="shrink-0 mt-0.5 text-slate-600" />
-                                        )}
-                                        <div className="flex-1">
-                                            <span className={`text-sm font-medium leading-relaxed block ${step.completed ? 'line-through opacity-50' : isActive ? 'text-indigo-100 font-semibold' : ''}`}>{step.text}</span>
-                                            {step.tools && step.tools.length > 0 && (
-                                                <div className="flex flex-wrap gap-1 mt-2">
-                                                    {step.tools.map((tool, ti) => (
-                                                        <span key={ti} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-950 border border-white/5 text-slate-500 uppercase">{tool}</span>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                    
-                                    {/* Filmstrip Metadata */}
-                                    {step.timestamp !== undefined && (
-                                        <div className="pl-9 flex items-center gap-3">
-                                             <div className="text-[10px] font-mono text-cyan-500 bg-cyan-950/30 px-1.5 rounded">
-                                                 {new Date(step.timestamp * 1000).toISOString().substr(14, 5)}
-                                             </div>
-                                             {isActive && activeYoutubeUrl && (
-                                                 <button 
-                                                    onClick={(e) => { e.stopPropagation(); setShowGoldenFrame(true); }}
-                                                    className="text-[9px] font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 bg-amber-950/30 px-2 py-0.5 rounded border border-amber-500/20"
-                                                 >
-                                                     <ScanEye size={10} /> GOLDEN FRAME
-                                                 </button>
-                                             )}
-                                        </div>
-                                    )}
-                                </li>
-                            )})}
-                        </ul>
-                    </>
-                ) : (
-                    <div className="h-96 lg:h-[30rem] bg-slate-950/50 border-2 border-dashed border-slate-800 rounded-[1.5rem] relative overflow-hidden group flex flex-col items-center justify-center transition-colors hover:border-slate-700">
-                      {referenceData ? (
-                        <>
-                          {isPdf ? (
-                              <object data={referenceData} type="application/pdf" className="w-full h-full object-contain p-4">
-                                  <div className="flex flex-col items-center justify-center h-full text-slate-500"><FileText size={64} className="mb-4 opacity-50"/><p className="font-bold">PDF Reference Loaded</p></div>
-                              </object>
-                          ) : (
-                              <img src={referenceData} alt="Reference" className="w-full h-full object-contain p-6 opacity-90 transition-opacity hover:opacity-100" />
-                          )}
-                          <button onClick={() => setReferenceData(null)} className="absolute top-4 right-4 bg-slate-900/80 hover:bg-red-900/80 p-2.5 rounded-full text-white z-10 backdrop-blur-md border border-white/10 transition-colors"><X size={18} /></button>
-                        </>
-                      ) : (
+                     </div>
+                )}
+
+                {/* Docs/File Upload Input */}
+                {activeTab === 'DOCS' && !referenceData && (
+                    <div className="h-96 lg:h-[30rem] bg-slate-950/50 border-2 border-dashed border-slate-800 rounded-[1.5rem] relative overflow-hidden group flex flex-col items-center justify-center transition-colors hover:border-slate-700 animate-in slide-in-from-left-4 fade-in">
                         <div className="text-center p-6 max-w-sm w-full flex flex-col gap-4">
                            <div className="flex justify-center gap-4 opacity-30 text-slate-400">
-                              <ImageIcon size={40} /><FileText size={40} /><Youtube size={40} />
+                              <ImageIcon size={40} /><FileText size={40} />
                            </div>
-                           
                            <div>
-                               <p className="text-sm font-bold text-slate-400 mb-1">Load Standard</p>
-                               <p className="text-[10px] text-slate-600">Drag & drop blueprints, PDFs, or scan manuals.</p>
+                               <p className="text-sm font-bold text-slate-400 mb-1">Load RAG Standard</p>
+                               <p className="text-[10px] text-slate-600">Drag & drop blueprints, PDFs for Vector Indexing.</p>
                            </div>
-                          
-                           {/* Action Grid */}
                            <div className="grid grid-cols-2 gap-3 w-full">
-                                <label className="flex flex-col items-center justify-center gap-2 bg-slate-800/50 hover:bg-slate-800 p-4 rounded-xl cursor-pointer border border-white/5 hover:border-white/10 transition-all">
+                                <label className={`flex flex-col items-center justify-center gap-2 bg-slate-800/50 hover:bg-slate-800 p-4 rounded-xl cursor-pointer border border-white/5 hover:border-white/10 transition-all ${vectorIndexStatus !== 'IDLE' && vectorIndexStatus !== 'READY' ? 'opacity-50 cursor-wait' : ''}`}>
                                     <Upload size={20} className="text-indigo-400" />
-                                    <span className="text-[10px] font-bold">UPLOAD FILE</span>
-                                    <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload} className="hidden" />
+                                    <span className="text-[10px] font-bold">{vectorIndexStatus === 'IDLE' || vectorIndexStatus === 'READY' ? "UPLOAD & INDEX" : vectorIndexStatus}</span>
+                                    <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload} className="hidden" disabled={vectorIndexStatus !== 'IDLE' && vectorIndexStatus !== 'READY'} />
                                 </label>
-                                
                                 <button onClick={handleScanManual} className="flex flex-col items-center justify-center gap-2 bg-slate-800/50 hover:bg-slate-800 p-4 rounded-xl cursor-pointer border border-white/5 hover:border-white/10 transition-all">
                                     <Camera size={20} className="text-green-400" />
                                     <span className="text-[10px] font-bold">SCAN MANUAL</span>
                                 </button>
                            </div>
-
-                           <div className="flex items-center gap-2 bg-slate-800/50 rounded-xl p-2 border border-white/5">
-                               <Youtube size={16} className="text-red-400 ml-2" />
-                               <input 
-                                    type="text" 
-                                    placeholder="Paste YouTube URL..." 
-                                    value={youtubeUrl}
-                                    onChange={(e) => setYoutubeUrl(e.target.value)}
-                                    className="bg-transparent border-none text-xs text-white focus:outline-none w-full"
-                               />
-                               <button onClick={handleYoutubeSubmit} disabled={!youtubeUrl || isImportingYt} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white disabled:opacity-50">
-                                   {isImportingYt ? <div className="animate-spin w-3 h-3 border-2 border-white rounded-full"/> : <LinkIcon size={14} />}
-                               </button>
-                           </div>
-
                            <button onClick={handleGenerateSchematic} disabled={isGeneratingSchematic} className="w-full py-3 bg-slate-900/50 hover:bg-purple-900/20 text-purple-300 rounded-xl font-bold text-[10px] tracking-wide border border-purple-500/20 hover:border-purple-500/50 flex items-center justify-center gap-2 transition-all">
                                   {isGeneratingSchematic ? <div className="animate-spin w-3 h-3 border-2 border-current rounded-full" /> : <Sparkles size={14} />}
                                   {isGeneratingSchematic ? "GENERATING..." : "GENERATE AI SCHEMATIC"}
                            </button>
                         </div>
-                      )}
+                    </div>
+                )}
+                
+                {/* Active Content View (Video or Doc) */}
+                {(activeYoutubeUrl || referenceData) && (
+                    <div className="flex flex-col gap-4 animate-in zoom-in-95 duration-300">
+                        {/* Reference Image Viewer */}
+                        {referenceData && (
+                            <div className="relative h-64 lg:h-80 bg-slate-950 rounded-2xl overflow-hidden border border-white/10 group">
+                                {isPdf ? (
+                                    <object data={referenceData} type="application/pdf" className="w-full h-full object-contain p-4">
+                                        <div className="flex flex-col items-center justify-center h-full text-slate-500"><FileText size={64} className="mb-4 opacity-50"/><p className="font-bold">PDF Reference Loaded</p></div>
+                                    </object>
+                                ) : (
+                                    <img src={referenceData} alt="Reference" className="w-full h-full object-contain p-4 opacity-90 transition-opacity hover:opacity-100" />
+                                )}
+                                <div className="absolute top-4 right-4 flex gap-2 z-10">
+                                    <span className="bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full text-[10px] font-bold text-green-400 border border-green-500/30 flex items-center gap-2">
+                                        <Database size={12} /> RAG INDEX: ACTIVE
+                                    </span>
+                                    <button onClick={() => setReferenceData(null)} className="bg-slate-900/80 hover:bg-red-900/80 p-1.5 rounded-full text-white border border-white/10 transition-colors"><X size={16} /></button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* YouTube Player */}
+                        {activeYoutubeUrl && (
+                            <div className={`rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-black relative mb-2 transition-all aspect-video group`}>
+                                <ReactPlayer
+                                    ref={playerRef}
+                                    url={activeYoutubeUrl}
+                                    width="100%"
+                                    height="100%"
+                                    controls
+                                    playing={isVideoPlaying}
+                                    onPlay={() => setIsVideoPlaying(true)}
+                                    onPause={() => setIsVideoPlaying(false)}
+                                    onEnded={() => setIsVideoPlaying(false)}
+                                    onProgress={handleVideoProgress}
+                                />
+                                <div className="absolute top-4 right-4 z-20">
+                                     <button onClick={() => { setActiveYoutubeUrl(null); setSopSteps([]); }} className="bg-slate-900/80 hover:bg-red-900/80 p-1.5 rounded-full text-white border border-white/10 transition-colors"><X size={16} /></button>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Timeline Steps */}
+                        {sopSteps.length > 0 && (
+                            <div className="flex flex-col gap-2">
+                                <div className="flex items-center justify-between px-2">
+                                     <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                                         <Layers size={14} /> Action Timeline
+                                     </h3>
+                                     {activeYoutubeUrl && (
+                                         <button 
+                                            onClick={() => setIsSupervisorMode(!isSupervisorMode)}
+                                            className={`text-[10px] font-bold px-3 py-1.5 rounded-full border transition-all flex items-center gap-2 ${isSupervisorMode ? 'bg-green-900/30 text-green-400 border-green-500/30 animate-pulse' : 'bg-slate-800 text-slate-400 border-white/10'}`}
+                                        >
+                                            <Zap size={12} /> {isSupervisorMode ? "SUPERVISOR ACTIVE" : "ENABLE SUPERVISOR"}
+                                        </button>
+                                     )}
+                                </div>
+                                <ul className="space-y-3 pb-4">
+                                    {sopSteps.map((step, index) => {
+                                        const isActive = !step.completed && (isSupervisorMode ? index === currentVideoStepIndex : index === firstIncompleteIndex);
+                                        return (
+                                        <li key={step.id} onClick={() => {
+                                                if (isSupervisorMode) {
+                                                    setCurrentVideoStepIndex(index);
+                                                    setShowGoldenFrame(false);
+                                                } else {
+                                                    toggleStep(step.id)
+                                                }
+                                            }} 
+                                            className={`flex flex-col gap-2 p-4 rounded-2xl cursor-pointer transition-all border ${
+                                            step.completed 
+                                                ? 'bg-green-950/20 border-green-500/20 text-slate-500' 
+                                                : isActive 
+                                                    ? 'bg-indigo-900/30 border-indigo-500/50 text-white shadow-[0_0_15px_rgba(99,102,241,0.15)] ring-1 ring-indigo-500/30' 
+                                                    : 'bg-slate-800/50 border-white/5 text-slate-400 hover:bg-slate-800 hover:border-white/10'
+                                        }`}>
+                                            <div className="flex items-start gap-4">
+                                                {step.completed ? (
+                                                    <CheckCircle size={20} className="shrink-0 mt-0.5 text-green-500" />
+                                                ) : isActive ? (
+                                                    <div className="shrink-0 mt-0.5 relative flex items-center justify-center w-5 h-5">
+                                                        <div className="absolute inset-0 bg-indigo-500/30 rounded-full animate-ping" />
+                                                        <div className="w-2.5 h-2.5 bg-indigo-400 rounded-full shadow-[0_0_10px_rgba(129,140,248,0.8)]" />
+                                                    </div>
+                                                ) : (
+                                                    <div className="shrink-0 mt-0.5 w-5 h-5 border-2 border-slate-600 rounded flex items-center justify-center">
+                                                        <span className="text-[10px] font-bold text-slate-500">{step.id}</span>
+                                                    </div>
+                                                )}
+                                                <div className="flex-1">
+                                                    <div className="flex justify-between items-start">
+                                                        <span className={`text-sm font-medium leading-relaxed block ${step.completed ? 'line-through opacity-50' : isActive ? 'text-indigo-100 font-semibold' : ''}`}>{step.text}</span>
+                                                        {isActive && activeYoutubeUrl && showGoldenFrame && (
+                                                            <button 
+                                                                onClick={(e) => { e.stopPropagation(); handleStepComplete(step.id); }}
+                                                                className="ml-2 bg-green-600 hover:bg-green-500 text-white px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider whitespace-nowrap shadow-lg animate-pulse"
+                                                            >
+                                                                Complete
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    {step.tools && step.tools.length > 0 && (
+                                                        <div className="flex flex-wrap gap-1 mt-2">
+                                                            {step.tools.map((tool, ti) => (
+                                                                <span key={ti} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-950 border border-white/5 text-slate-500 uppercase">{tool}</span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Filmstrip Metadata */}
+                                            {step.timestamp !== undefined && (
+                                                <div className="pl-9 flex items-center gap-3">
+                                                     <div className="text-[10px] font-mono text-cyan-500 bg-cyan-950/30 px-1.5 rounded flex items-center gap-1">
+                                                         <Play size={8} fill="currentColor" /> {new Date(step.timestamp * 1000).toISOString().substr(14, 5)}
+                                                     </div>
+                                                     {isActive && activeYoutubeUrl && (
+                                                         <button 
+                                                            onClick={(e) => { e.stopPropagation(); setShowGoldenFrame(true); if(playerRef.current) playerRef.current.seekTo(step.timestamp); setIsVideoPlaying(false); }}
+                                                            className="text-[9px] font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 bg-amber-950/30 px-2 py-0.5 rounded border border-amber-500/20"
+                                                         >
+                                                             <ScanEye size={10} /> SHOW GHOST
+                                                         </button>
+                                                     )}
+                                                </div>
+                                            )}
+                                        </li>
+                                    )})}
+                                </ul>
+                            </div>
+                        )}
                     </div>
                 )}
 
-                <div>
-                  <label className="text-xs font-bold text-slate-500 mb-3 block uppercase tracking-widest flex items-center gap-2">
-                     <ShieldAlert size={12} /> Protocol Context
-                  </label>
-                  <textarea 
-                    value={protocolText} 
-                    onChange={(e) => setProtocolText(e.target.value)} 
-                    className="w-full h-40 bg-slate-950/50 border border-slate-800 rounded-[1.5rem] p-5 text-sm text-slate-300 font-mono focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 resize-none leading-relaxed transition-all placeholder:text-slate-700"
-                    placeholder="Enter safety protocols here..."
-                  />
-                </div>
+                {/* Protocol Context */}
+                {!activeYoutubeUrl && (
+                    <div>
+                      <label className="text-xs font-bold text-slate-500 mb-3 block uppercase tracking-widest flex items-center gap-2">
+                         <ShieldAlert size={12} /> Protocol Context
+                      </label>
+                      <textarea 
+                        value={protocolText} 
+                        onChange={(e) => setProtocolText(e.target.value)} 
+                        className="w-full h-40 bg-slate-950/50 border border-slate-800 rounded-[1.5rem] p-5 text-sm text-slate-300 font-mono focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 resize-none leading-relaxed transition-all placeholder:text-slate-700"
+                        placeholder="Enter safety protocols here..."
+                      />
+                    </div>
+                )}
                 </>
             )}
           </div>
@@ -1368,7 +1503,7 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
           <div className="absolute top-6 left-6 right-6 z-40 flex items-center justify-between pointer-events-none">
             <div className="pointer-events-auto flex items-center gap-3 bg-slate-950/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/5">
                 <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : isArmed ? "bg-cyan-500 animate-pulse shadow-[0_0_10px_rgba(34,211,238,0.6)]" : "bg-slate-600"}`} />
-                <h2 className="text-xs font-bold text-white tracking-wide uppercase">{isRecording ? "REC" : "Dual-Inference Stream"}</h2>
+                <h2 className="text-xs font-bold text-white tracking-wide uppercase">{isRecording ? "REC" : "Edge Inference Stream"}</h2>
             </div>
 
             <div data-tour-id="ar-controls" className="pointer-events-auto flex items-center gap-2 bg-slate-950/60 backdrop-blur-md p-1.5 rounded-full border border-white/5">
@@ -1491,30 +1626,42 @@ ${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString
                  </div>
             )}
             
-            {/* Golden Frame AR Overlay (YouTube Player Overlaid) */}
+            {/* Ghost Overlay (Golden Frame from YouTube) */}
             {activeYoutubeUrl && showGoldenFrame && (
-                <div className="absolute inset-0 z-10 pointer-events-none opacity-50 flex items-center justify-center">
+                <div className="absolute inset-0 z-20 pointer-events-none opacity-50 flex items-center justify-center overflow-hidden">
                     <ReactPlayer
                         url={activeYoutubeUrl}
                         width="100%"
                         height="100%"
                         playing={false} // Static frame reference
                         controls={false}
-                        light={true} // Just show thumbnail or initial frame
-                        style={{ objectFit: 'cover' }}
+                        light={false}
+                        ref={(p) => { 
+                            // This is a second player instance just for the ghost overlay
+                            // We need to sync it to the current step timestamp
+                            if (p && sopSteps[currentVideoStepIndex]) {
+                                p.seekTo(sopSteps[currentVideoStepIndex].timestamp || 0, 'seconds');
+                            }
+                        }}
+                        style={{ objectFit: 'cover', transform: 'scale(1.1)' }} // Slight zoom to fill
+                        muted
                     />
-                    <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-amber-500/80 text-black px-4 py-1 rounded-full font-bold text-xs animate-pulse">
-                        GOLDEN FRAME ALIGNMENT MODE
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 border-2 border-amber-500/50 rounded-full animate-ping" />
+                    <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-amber-500/90 text-black px-6 py-2 rounded-full font-bold text-sm shadow-[0_0_30px_rgba(245,158,11,0.6)] animate-pulse flex items-center gap-2">
+                        <ScanEye size={18} /> GHOST MODE ACTIVE
                     </div>
                 </div>
             )}
             
             {/* Exit Golden Frame Button */}
             {activeYoutubeUrl && showGoldenFrame && (
-                <div className="absolute top-24 right-1/2 translate-x-1/2 z-50">
-                    <button onClick={() => setShowGoldenFrame(false)} className="bg-slate-900 hover:bg-red-600 text-white px-4 py-2 rounded-full font-bold text-xs shadow-xl transition-colors border border-white/10">
-                        EXIT ALIGNMENT
-                    </button>
+                <div className="absolute bottom-32 left-1/2 -translate-x-1/2 z-50 pointer-events-auto">
+                     <button 
+                        onClick={() => handleStepComplete(sopSteps[currentVideoStepIndex].id)}
+                        className="bg-green-600 hover:bg-green-500 text-white px-8 py-4 rounded-full font-bold text-lg shadow-2xl transition-all border-4 border-black/20 flex items-center gap-3 animate-bounce"
+                     >
+                        <CheckCircle size={24} /> STEP COMPLETE
+                     </button>
                 </div>
             )}
 

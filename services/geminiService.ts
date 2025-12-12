@@ -140,15 +140,16 @@ export const processYoutubeVideo = async (apiKey: string, url: string): Promise<
         const ai = new GoogleGenAI({ apiKey });
         // Generate steps based on the context of the title
         const response = await ai.models.generateContent({
-             model: "gemini-2.5-flash", // Using 2.5 Flash for speed, assuming title context is sufficient
+             model: "gemini-2.5-flash", 
              contents: {
                  parts: [{ text: `Context: An industrial training video titled "${title}". 
-                 Task: Break this procedure down into 5-8 discrete 'Action Steps'. 
-                 For each step:
-                 1. Write a clear instructional summary (max 10 words).
-                 2. Estimate the 'Golden Frame' Timestamp (in seconds) where this step is likely COMPLETED or fully visible.
-                 3. List tools required for this specific step.
-                 Output: A JSON array of objects.` }]
+                 Task: Break this procedure down into discrete, logical 'Action Steps'. 
+                 For each step, extract:
+                 1. The 'Golden Frame' timestamp (seconds from start) where the step is completed.
+                 2. A concise instruction text (max 10 words).
+                 3. A list of tools used.
+                 
+                 Output: A JSON array of step objects.` }]
              },
              config: { 
                  responseMimeType: "application/json",
@@ -414,7 +415,8 @@ export const analyzeCompliance = async (
             3. ${hazardInstruction}
             4. If state matches reference: Status = MATCH.
             5. If deviation/entropy detected: Status = DRIFT. Severity = LOW/MEDIUM/CRITICAL.
-            6. Generate a corrective voice command (max 15 words), translated to: ${targetLanguage === 'auto' ? 'Detected Language' : targetLanguage}.`
+            6. Perform OBJECT LOCALIZATION on the Anomaly. Return bounding box [x, y, width, height] of the specific deviation (e.g., the loose wire, the missing bolt). If MATCH, return a safe zone box.
+            7. Generate a corrective voice command (max 15 words), translated to: ${targetLanguage === 'auto' ? 'Detected Language' : targetLanguage}.`
         },
         {
             inlineData: {
@@ -438,10 +440,10 @@ export const analyzeCompliance = async (
                     mimeType: mimeType
                 }
             });
-            parts.push({ text: "Reference Standard (Digital Twin)" });
+            parts.push({ text: "Reference Standard (Vector Retrieval Context)" });
         } else {
              // Handle case where reference is a URL (e.g. YouTube thumbnail) or raw text
-             parts.push({ text: `Reference Context URI: ${referenceDataBase64}. In-Context Learning Mode Active.`});
+             parts.push({ text: `Reference Context URI: ${referenceDataBase64}. RAG Mode Active.`});
         }
     }
 
@@ -453,7 +455,7 @@ export const analyzeCompliance = async (
             coordinates: { 
                 type: Type.ARRAY, 
                 items: { type: Type.INTEGER },
-                description: "Bounding box [x, y, width, height] on a 0-1000 scale." 
+                description: "Bounding box [x, y, width, height] of the ANOMALY or FOCUS AREA on a 0-1000 scale." 
             },
             correction_voice: { type: Type.STRING }
         },
