@@ -11,7 +11,7 @@ import {
     Languages, ScanEye, ZoomIn, Target, MessageSquare, Sparkles, AlertCircle,
     Hand, GripHorizontal, Microscope, ClipboardList, Video, Leaf,
     FileText as FileDoc, Table, FileOutput, HelpCircle, Youtube, Link as LinkIcon,
-    Play, Pause, FastForward, SkipBack, Layers
+    Play, Pause, FastForward, SkipBack, Layers, FileJson
 } from 'lucide-react';
 import { analyzeCompliance, generateSchematic, digitizeSOP, performPreFlightCheck, detectLanguageFromAudio, performEnvironmentalTranslation, verifyToolState, generateSOPFromFrames, estimateWasteImpact, processYoutubeVideo } from './services/geminiService';
 import { SettingsModal } from './components/SettingsModal';
@@ -297,22 +297,34 @@ const App: React.FC = () => {
       return () => clearInterval(interval);
   }, [isRecording, apiKey, isMasterMode, speak]);
 
-  // Supervisor Mode Video Sync
+  // Supervisor Mode Video Sync Logic
+  const handleVideoProgress = ({ playedSeconds }: { playedSeconds: number }) => {
+    if (!isSupervisorMode || !activeYoutubeUrl || sopSteps.length === 0 || showGoldenFrame) return;
+
+    const currentStep = sopSteps[currentVideoStepIndex];
+    if (currentStep && currentStep.timestamp) {
+        // Stop 0.5s before the target timestamp to show the golden frame
+        if (playedSeconds >= currentStep.timestamp - 0.5) {
+            setIsVideoPlaying(false);
+            if (playerRef.current) {
+                playerRef.current.seekTo(currentStep.timestamp, 'seconds');
+            }
+            setShowGoldenFrame(true);
+            speak(`Step target reached. Align with overlay: ${currentStep.text}`);
+        }
+    }
+  };
+
+  // When enabling Supervisor mode, reset and play
   useEffect(() => {
       if (isSupervisorMode && activeYoutubeUrl && sopSteps.length > 0 && playerRef.current) {
-          const step = sopSteps[currentVideoStepIndex];
-          // We seek to a few seconds BEFORE the end state so user can watch the action leading up to it
-          // OR if it represents the start, we seek to it. 
-          // Assuming timestamp is the Golden Frame (Completion), we might want to seek to previous step's end to play the segment.
-          // For simplicity, let's just seek to the timestamp and pause to show the "Golden Frame" overlay.
-          if (step && step.timestamp !== undefined) {
-              playerRef.current.seekTo(step.timestamp);
-              setIsVideoPlaying(false); // Pause at the Golden Frame for alignment
-              setShowGoldenFrame(true); // Auto show overlay
-              speak(`Step ${step.id}: ${step.text}. Align with overlay.`);
-          }
+           // If just starting, ensure we play
+           if (currentVideoStepIndex === 0 && !showGoldenFrame) {
+               setIsVideoPlaying(true);
+           }
       }
-  }, [currentVideoStepIndex, isSupervisorMode, activeYoutubeUrl, sopSteps, speak]);
+  }, [isSupervisorMode, activeYoutubeUrl, sopSteps, currentVideoStepIndex, showGoldenFrame]);
+
 
   // ------------------------------------------------------------------------
   // Core Visual Logic
@@ -577,20 +589,26 @@ const App: React.FC = () => {
 
         // Supervisor Auto-Advance Logic
         if (isSupervisorMode && isMatch) {
-            // Auto advance
-            if (currentVideoStepIndex < sopStepsRef.current.length - 1) {
-                const nextIdx = currentVideoStepIndex + 1;
-                setCurrentVideoStepIndex(nextIdx);
-                // The useEffect will handle seeking and pausing
-                speak("Step verified. Advancing protocol.");
-                // Mark current as complete
-                const newSteps = [...sopStepsRef.current];
-                newSteps[currentVideoStepIndex].completed = true;
-                setSopSteps(newSteps);
-            } else {
-                speak("All steps complete. Protocol finished.");
-                setIsSupervisorMode(false);
-                setShowGoldenFrame(false);
+            // Check if match was found WHILE showing golden frame
+            if (showGoldenFrame) {
+                 if (currentVideoStepIndex < sopStepsRef.current.length - 1) {
+                    const nextIdx = currentVideoStepIndex + 1;
+                    setCurrentVideoStepIndex(nextIdx);
+                    // Hide overlay, start playing next segment
+                    setShowGoldenFrame(false);
+                    setIsVideoPlaying(true);
+                    speak("Verified. Playing next step.");
+                    
+                    // Mark current as complete
+                    const newSteps = [...sopStepsRef.current];
+                    newSteps[currentVideoStepIndex].completed = true;
+                    setSopSteps(newSteps);
+                 } else {
+                    speak("All steps complete. Protocol finished.");
+                    setIsSupervisorMode(false);
+                    setShowGoldenFrame(false);
+                    setIsVideoPlaying(false);
+                 }
             }
         }
 
@@ -600,7 +618,7 @@ const App: React.FC = () => {
       }
     }
     setIsAnalyzing(false);
-  }, [apiKey, referenceData, protocolText, isPrivacyMode, isFrozen, applyPrivacyFilter, isMirrored, language, speak, isTranslatingEnv, hazards, showError, showInfo, isSupervisorMode, currentVideoStepIndex, activeYoutubeUrl]);
+  }, [apiKey, referenceData, protocolText, isPrivacyMode, isFrozen, applyPrivacyFilter, isMirrored, language, speak, isTranslatingEnv, hazards, showError, showInfo, isSupervisorMode, currentVideoStepIndex, activeYoutubeUrl, showGoldenFrame]);
 
   // ------------------------------------------------------------------------
   // Audio & Voice Logic
@@ -912,6 +930,39 @@ const App: React.FC = () => {
       }, 1500);
   };
 
+  const handleExportMarkdown = () => {
+      if (sopSteps.length === 0) return;
+      showInfo("Generating Markdown documentation...");
+      
+      const mdContent = `
+# Standard Operating Procedure (SOP)
+**Generated by EntropyGuard AI**
+
+**Source:** ${activeYoutubeUrl || "Manual/Scan"}
+**Date:** ${new Date().toLocaleDateString()}
+
+## Protocol Steps
+${sopSteps.map(step => `
+### Step ${step.id}
+**Instruction:** ${step.text}
+${step.tools && step.tools.length ? `**Tools Required:** ${step.tools.join(', ')}` : ''}
+${step.timestamp ? `**Timestamp:** ${new Date(step.timestamp * 1000).toISOString().substr(14, 5)}` : ''}
+- [${step.completed ? 'x' : ' '}] Verified
+`).join('\n')}
+
+---
+*Generated by EntropyGuard Neural Engine*
+      `.trim();
+
+      const blob = new Blob([mdContent], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `SOP_Protocol_${new Date().toISOString().split('T')[0]}.md`;
+      a.click();
+      speak("Markdown documentation exported.");
+  };
+
   const handleSaveMasterPDF = () => {
       showInfo("Compiling PDF from video segments...");
       setTimeout(() => {
@@ -1112,6 +1163,7 @@ const App: React.FC = () => {
                             onPlay={() => setIsVideoPlaying(true)}
                             onPause={() => setIsVideoPlaying(false)}
                             onEnded={() => setIsVideoPlaying(false)}
+                            onProgress={handleVideoProgress}
                         />
                     </div>
                 )}
@@ -1123,14 +1175,25 @@ const App: React.FC = () => {
                              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
                                  <Layers size={14} /> Action Steps
                              </h3>
-                             {activeYoutubeUrl && (
-                                 <button 
-                                     onClick={() => setIsSupervisorMode(!isSupervisorMode)}
-                                     className={`text-[10px] font-bold px-3 py-1.5 rounded-full border transition-all flex items-center gap-2 ${isSupervisorMode ? 'bg-green-900/30 text-green-400 border-green-500/30 animate-pulse' : 'bg-slate-800 text-slate-400 border-white/10'}`}
-                                 >
-                                     <Zap size={12} /> {isSupervisorMode ? "SUPERVISOR ACTIVE" : "ENABLE SUPERVISOR"}
-                                 </button>
-                             )}
+                             <div className="flex items-center gap-2">
+                                 {activeYoutubeUrl && (
+                                     <>
+                                        <button 
+                                            onClick={handleExportMarkdown}
+                                            className="text-[10px] font-bold px-2 py-1.5 rounded-full border bg-slate-800 text-slate-400 border-white/10 hover:bg-slate-700 hover:text-white transition-all flex items-center gap-1"
+                                            title="Export as Markdown"
+                                        >
+                                            <FileJson size={12} /> MD
+                                        </button>
+                                        <button 
+                                            onClick={() => setIsSupervisorMode(!isSupervisorMode)}
+                                            className={`text-[10px] font-bold px-3 py-1.5 rounded-full border transition-all flex items-center gap-2 ${isSupervisorMode ? 'bg-green-900/30 text-green-400 border-green-500/30 animate-pulse' : 'bg-slate-800 text-slate-400 border-white/10'}`}
+                                        >
+                                            <Zap size={12} /> {isSupervisorMode ? "SUPERVISOR ACTIVE" : "ENABLE SUPERVISOR"}
+                                        </button>
+                                     </>
+                                 )}
+                             </div>
                         </div>
                         <ul className="space-y-3">
                             {sopSteps.map((step, index) => {
@@ -1141,6 +1204,7 @@ const App: React.FC = () => {
                                         if (isSupervisorMode) {
                                             setCurrentVideoStepIndex(index);
                                             // Manual override also sets SOP active step logic
+                                            setShowGoldenFrame(false);
                                         } else {
                                             toggleStep(step.id)
                                         }
