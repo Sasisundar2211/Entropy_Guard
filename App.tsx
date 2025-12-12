@@ -104,14 +104,15 @@ const App: React.FC = () => {
 
   // --- LIFECYCLE ---
   
-  // Cleanup Blob URLs to prevent memory leaks (Critical for PDF handling)
+  // CRITICAL FIX: Only cleanup Blob URL if the CONTENT itself changes. 
+  // Previous bug caused revocation when metadata (like steps) updated, breaking the view.
   useEffect(() => {
     return () => {
         if (referenceData?.content && referenceData.content.startsWith('blob:')) {
             URL.revokeObjectURL(referenceData.content);
         }
     };
-  }, [referenceData]);
+  }, [referenceData?.content]); // Dependency strictly on content string
 
   useEffect(() => {
     if (appState === AppState.DASHBOARD) {
@@ -188,12 +189,10 @@ const App: React.FC = () => {
       localStorage.setItem('entropy_tutorial_v2', 'true');
   };
 
-  // Fixed PDF Handler using Blob URLs - Solves Chrome Security Block
   const handleFileUpload = (file: File) => {
-    // Create a Blob URL - Safe for Chrome/modern browsers
+    // Generate Blob URL - Safe for Chrome/modern browsers
     const objectUrl = URL.createObjectURL(file);
     
-    // Determine type based on MIME
     const isPdf = file.type.includes('pdf');
     const type = isPdf ? 'PDF' : 'IMAGE';
 
@@ -208,7 +207,6 @@ const App: React.FC = () => {
     showToast(`${isPdf ? 'Manual' : 'Schematic'} Uploaded Successfully`, 'success');
   };
 
-  // Updated Handler - Accepts cleaned URL from ReferenceViewer
   const handleYoutubeSubmit = async (embedUrl: string) => {
       if (!embedUrl) return;
       
@@ -236,7 +234,6 @@ const App: React.FC = () => {
       } catch (e) {
          addLog("Failed to parse video content.", 'ERROR');
          showToast("Failed to parse video. Using raw playback.", 'error');
-         // No need to set reference data again as fallback, it's already there.
       } finally {
          setYoutubeLoading(false);
       }
@@ -266,7 +263,7 @@ const App: React.FC = () => {
             showToast("Drift Detected", 'error');
         } 
     } catch(e) {
-        // Silent fail on frame capture errors to avoid spamming logs
+        // Silent fail on frame capture errors
     }
   }, [apiKey, referenceData, isPaused, isCameraActive]);
 
@@ -349,32 +346,33 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* --- MAIN CONTENT --- */}
+      {/* --- MAIN CONTENT (CSS GRID) --- */}
       <div className="flex-1 flex flex-col min-h-0">
           
-          {/* Main Container - Ensuring strictly 50/50 split with flex-1 w-0 min-w-0 */}
-          <main className="flex-1 p-4 flex gap-4 overflow-hidden relative">
+          <main className="flex-1 p-4 grid grid-cols-1 lg:grid-cols-2 gap-4 overflow-hidden relative">
             
             {appState === AppState.CALIBRATION && (
                 <CalibrationWizard onComplete={() => setAppState(AppState.MONITORING)} />
             )}
 
-            {/* LEFT CARD: INGESTION / CHECKLIST - Using Refactored Component */}
-            <ReferenceViewer 
-                referenceData={referenceData}
-                onUpload={handleFileUpload}
-                onClear={() => {
-                    setReferenceData(null);
-                    showToast("Reference Cleared", 'info');
-                }}
-                onYoutubeSubmit={handleYoutubeSubmit}
-                isLoading={youtubeLoading}
-            />
+            {/* LEFT CARD: Reference Context (PDF/YouTube) */}
+            <div className="flex flex-col h-full overflow-hidden">
+                <ReferenceViewer 
+                    referenceData={referenceData}
+                    onUpload={handleFileUpload}
+                    onClear={() => {
+                        setReferenceData(null);
+                        showToast("Reference Cleared", 'info');
+                    }}
+                    onYoutubeSubmit={handleYoutubeSubmit}
+                    isLoading={youtubeLoading}
+                />
+            </div>
 
-            {/* RIGHT CARD: LIVE ANALYSIS */}
+            {/* RIGHT CARD: Live Analysis */}
             <section 
                 data-tour-id="live-feed-card"
-                className="flex-1 w-0 min-w-0 bg-[#1E2229] rounded-3xl shadow-xl flex flex-col relative overflow-hidden border border-[#2B2F36]"
+                className="flex flex-col h-full bg-[#1E2229] rounded-3xl shadow-xl border border-[#2B2F36] overflow-hidden"
             >
                 <div className="px-6 py-4 border-b border-[#2B2F36] flex items-center justify-between">
                     <span className="text-sm font-semibold text-[#E3E3E3] flex items-center gap-2">
@@ -382,7 +380,6 @@ const App: React.FC = () => {
                     </span>
                     
                     <div className="flex items-center gap-3">
-                        {/* Camera Toggle */}
                         <button
                             onClick={() => {
                                 const nextState = !isCameraActive;
@@ -399,7 +396,6 @@ const App: React.FC = () => {
                             {isCameraActive ? <Video size={16} /> : <VideoOff size={16} />}
                         </button>
 
-                        {/* Calibration Controls */}
                         <div className="hidden md:flex items-center gap-4">
                             <div className="flex items-center gap-3 bg-[#111318]/60 px-3 py-1 rounded-lg border border-[#444746]/50">
                                 <div className="flex items-center gap-2" title="Use Arrow Keys">
@@ -428,7 +424,7 @@ const App: React.FC = () => {
                                 screenshotFormat="image/jpeg"
                             />
                             
-                            {/* CONFIDENCE BAR OVERLAY */}
+                            {/* Confidence Bar */}
                             {appState === AppState.MONITORING && (
                                 <div className="absolute top-4 left-4 right-4 flex gap-2">
                                     <div className="flex-1 h-1.5 bg-black/50 rounded-full overflow-hidden backdrop-blur">
@@ -446,7 +442,7 @@ const App: React.FC = () => {
                                 </div>
                             )}
 
-                            {/* AR Overlays */}
+                            {/* Calibration AR */}
                             <div 
                                 className="absolute inset-0 pointer-events-none overflow-hidden" 
                                 style={{ 
@@ -469,7 +465,6 @@ const App: React.FC = () => {
                                 )}
                             </div>
 
-                             {/* Voice Active Indicator */}
                              {appState === AppState.MONITORING && isVoiceActive && (
                                 <div className="absolute top-4 right-4 bg-black/40 backdrop-blur rounded-full p-2 border border-white/10 animate-pulse">
                                     <Mic size={16} className="text-[#FFB4AB]" />
@@ -487,7 +482,6 @@ const App: React.FC = () => {
                     )}
                 </div>
 
-                {/* Bottom Controls */}
                 <div className="bg-[#1E2229] border-t border-[#2B2F36] p-4">
                     <div className="flex items-center justify-between gap-4">
                         <div className="flex-1 flex items-center">

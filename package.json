@@ -15,7 +15,8 @@
     "@google/genai": "^1.33.0",
     "react-webcam": "^7.2.0",
     "face-api.js": "^0.22.2",
-    "react-player": "^2.16.0"
+    "react-player": "^2.16.0",
+    "jspdf": "2.5.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
