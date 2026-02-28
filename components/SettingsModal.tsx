@@ -3,6 +3,29 @@ import React, { useState } from 'react';
 import { X, Key, ShieldCheck, Boxes, Globe, ChevronDown } from 'lucide-react';
 import { PrivacyMode, Language } from '../types';
 
+interface PrivacyModeButtonProps {
+  mode: PrivacyMode;
+  currentMode: PrivacyMode;
+  activeClass: string;
+  icon: React.ReactNode;
+  label: string;
+  onClick: (mode: PrivacyMode) => void;
+}
+
+const PrivacyModeButton: React.FC<PrivacyModeButtonProps> = ({ mode, currentMode, activeClass, icon, label, onClick }) => (
+  <button
+    onClick={() => onClick(mode)}
+    className={`p-4 rounded-3xl text-sm font-medium transition-all flex flex-col items-center gap-2 border-2 ${
+      currentMode === mode
+        ? activeClass
+        : 'bg-[#1E2229] border-[#444746] text-[#C4C7C5] hover:bg-[#2B2F36]'
+    }`}
+  >
+    {icon}
+    {label}
+  </button>
+);
+
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -92,28 +115,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div>
             <label className="block text-[#C4C7C5] text-sm font-medium mb-3 ml-1">Privacy Engine</label>
             <div className="grid grid-cols-2 gap-3">
-              <button 
-                onClick={() => setPrivacyMode(PrivacyMode.SIMULATION)}
-                className={`p-4 rounded-3xl text-sm font-medium transition-all flex flex-col items-center gap-2 border-2 ${
-                    privacyMode === PrivacyMode.SIMULATION 
-                    ? 'bg-[#374939] border-[#374939] text-[#C4EED0]' 
-                    : 'bg-[#1E2229] border-[#444746] text-[#C4C7C5] hover:bg-[#2B2F36]'
-                }`}
-              >
-                <Boxes size={24} />
-                Simulation
-              </button>
-              <button 
-                onClick={() => setPrivacyMode(PrivacyMode.REAL_AI)}
-                className={`p-4 rounded-3xl text-sm font-medium transition-all flex flex-col items-center gap-2 border-2 ${
-                    privacyMode === PrivacyMode.REAL_AI 
-                    ? 'bg-[#4A4458] border-[#4A4458] text-[#E8DEF8]' 
-                    : 'bg-[#1E2229] border-[#444746] text-[#C4C7C5] hover:bg-[#2B2F36]'
-                }`}
-              >
-                <ShieldCheck size={24} />
-                Real AI
-              </button>
+              <PrivacyModeButton
+                mode={PrivacyMode.SIMULATION}
+                currentMode={privacyMode}
+                activeClass="bg-[#374939] border-[#374939] text-[#C4EED0]"
+                icon={<Boxes size={24} />}
+                label="Simulation"
+                onClick={setPrivacyMode}
+              />
+              <PrivacyModeButton
+                mode={PrivacyMode.REAL_AI}
+                currentMode={privacyMode}
+                activeClass="bg-[#4A4458] border-[#4A4458] text-[#E8DEF8]"
+                icon={<ShieldCheck size={24} />}
+                label="Real AI"
+                onClick={setPrivacyMode}
+              />
             </div>
           </div>
 
