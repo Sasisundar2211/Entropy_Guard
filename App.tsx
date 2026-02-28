@@ -16,6 +16,7 @@ import { ComplianceModal } from './components/ComplianceModal';
 import { ReferenceViewer } from './components/ReferenceViewer';
 import { performEntropyCheck, generateStepsFromUrl } from './services/geminiService';
 import { ReferenceData, EntropyAnalysisResult, ComplianceStatus, DriftSeverity, PrivacyMode, AppState, Language, LogEntry, TaskStep } from './types';
+import { generateId } from './utils';
 
 // --- TYPES ---
 interface Toast {
@@ -85,7 +86,7 @@ const App: React.FC = () => {
 
   // --- TOAST SYSTEM ---
   const showToast = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
-    const id = Math.random().toString(36).substr(2, 9);
+    const id = generateId();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
         setToasts(prev => prev.filter(t => t.id !== id));
@@ -95,7 +96,7 @@ const App: React.FC = () => {
   // --- LOGGING HELPER ---
   const addLog = (message: string, type: LogEntry['type'] = 'INFO') => {
       setLogs(prev => [...prev, {
-          id: Math.random().toString(36).substr(2, 9),
+          id: generateId(),
           timestamp: new Date().toLocaleTimeString([], { hour12: false }),
           type,
           message
