@@ -2,6 +2,7 @@ import React from 'react';
 import { ShieldCheck, Download, RefreshCw, AlertTriangle, FileText } from 'lucide-react';
 import { LogEntry } from '../types';
 import { jsPDF } from "jspdf";
+import { generateId } from '../utils/helpers';
 
 interface Props {
   logs: LogEntry[];
@@ -9,12 +10,24 @@ interface Props {
   onReset: () => void;
 }
 
+interface StatCardProps {
+  label: string;
+  children: React.ReactNode;
+}
+
+const StatCard: React.FC<StatCardProps> = ({ label, children }) => (
+  <div className="bg-[#111318] p-4 rounded-2xl border border-[#2B2F36]">
+    <p className="text-xs text-[#8E918F] uppercase">{label}</p>
+    {children}
+  </div>
+);
+
 export const ComplianceModal: React.FC<Props> = ({ logs, duration, onReset }) => {
   const errors = logs.filter(l => l.type === 'ERROR').length;
   const complianceScore = Math.max(0, 100 - (errors * 15));
 
   const handleDownload = () => {
-    const sessionId = Math.random().toString(36).substr(2, 9).toUpperCase();
+    const sessionId = generateId().toUpperCase();
     const date = new Date().toLocaleString();
     
     // Initialize PDF
@@ -128,14 +141,8 @@ export const ComplianceModal: React.FC<Props> = ({ logs, duration, onReset }) =>
         </div>
 
         <div className="grid grid-cols-2 gap-4 mb-8">
-            <div className="bg-[#111318] p-4 rounded-2xl border border-[#2B2F36]">
-                <p className="text-xs text-[#8E918F] uppercase">Duration</p>
-                <p className="text-xl font-mono text-[#E3E3E3]">{duration}</p>
-            </div>
-            <div className="bg-[#111318] p-4 rounded-2xl border border-[#2B2F36]">
-                <p className="text-xs text-[#8E918F] uppercase">Critical Errors</p>
-                <p className={`text-xl font-mono ${errors > 0 ? 'text-[#FFB4AB]' : 'text-[#6DD58C]'}`}>{errors}</p>
-            </div>
+            <StatCard label="Duration"><p className="text-xl font-mono text-[#E3E3E3]">{duration}</p></StatCard>
+            <StatCard label="Critical Errors"><p className={`text-xl font-mono ${errors > 0 ? 'text-[#FFB4AB]' : 'text-[#6DD58C]'}`}>{errors}</p></StatCard>
             <div className="col-span-2 bg-[#111318] p-4 rounded-2xl border border-[#2B2F36] flex items-center justify-between">
                 <div>
                     <p className="text-xs text-[#8E918F] uppercase">Compliance Score</p>
