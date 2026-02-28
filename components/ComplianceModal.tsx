@@ -2,6 +2,7 @@ import React from 'react';
 import { ShieldCheck, Download, RefreshCw, AlertTriangle, FileText } from 'lucide-react';
 import { LogEntry } from '../types';
 import { jsPDF } from "jspdf";
+import { generateId } from '../utils';
 
 interface Props {
   logs: LogEntry[];
@@ -9,12 +10,19 @@ interface Props {
   onReset: () => void;
 }
 
+const StatCard: React.FC<{ label: string; children: React.ReactNode; className?: string }> = ({ label, children, className = '' }) => (
+  <div className={`bg-[#111318] p-4 rounded-2xl border border-[#2B2F36] ${className}`}>
+    <p className="text-xs text-[#8E918F] uppercase">{label}</p>
+    {children}
+  </div>
+);
+
 export const ComplianceModal: React.FC<Props> = ({ logs, duration, onReset }) => {
   const errors = logs.filter(l => l.type === 'ERROR').length;
   const complianceScore = Math.max(0, 100 - (errors * 15));
 
   const handleDownload = () => {
-    const sessionId = Math.random().toString(36).substr(2, 9).toUpperCase();
+    const sessionId = generateId().toUpperCase();
     const date = new Date().toLocaleString();
     
     // Initialize PDF
@@ -128,21 +136,18 @@ export const ComplianceModal: React.FC<Props> = ({ logs, duration, onReset }) =>
         </div>
 
         <div className="grid grid-cols-2 gap-4 mb-8">
-            <div className="bg-[#111318] p-4 rounded-2xl border border-[#2B2F36]">
-                <p className="text-xs text-[#8E918F] uppercase">Duration</p>
+            <StatCard label="Duration">
                 <p className="text-xl font-mono text-[#E3E3E3]">{duration}</p>
-            </div>
-            <div className="bg-[#111318] p-4 rounded-2xl border border-[#2B2F36]">
-                <p className="text-xs text-[#8E918F] uppercase">Critical Errors</p>
+            </StatCard>
+            <StatCard label="Critical Errors">
                 <p className={`text-xl font-mono ${errors > 0 ? 'text-[#FFB4AB]' : 'text-[#6DD58C]'}`}>{errors}</p>
-            </div>
-            <div className="col-span-2 bg-[#111318] p-4 rounded-2xl border border-[#2B2F36] flex items-center justify-between">
-                <div>
-                    <p className="text-xs text-[#8E918F] uppercase">Compliance Score</p>
+            </StatCard>
+            <StatCard label="Compliance Score" className="col-span-2">
+                <div className="flex items-center justify-between">
                     <p className={`text-2xl font-bold ${complianceScore > 80 ? 'text-[#6DD58C]' : 'text-[#FFB4AB]'}`}>{complianceScore}%</p>
+                    {complianceScore < 100 && <AlertTriangle className="text-[#FFB4AB]" />}
                 </div>
-                {complianceScore < 100 && <AlertTriangle className="text-[#FFB4AB]" />}
-            </div>
+            </StatCard>
         </div>
 
         <div className="flex gap-4">
