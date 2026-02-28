@@ -2,6 +2,19 @@ import React from 'react';
 import { ShieldCheck, Download, RefreshCw, AlertTriangle, FileText } from 'lucide-react';
 import { LogEntry } from '../types';
 import { jsPDF } from "jspdf";
+import { generateId } from '../utils';
+
+interface StatCardProps {
+  label: string;
+  value: React.ReactNode;
+}
+
+const StatCard: React.FC<StatCardProps> = ({ label, value }) => (
+  <div className="bg-[#111318] p-4 rounded-2xl border border-[#2B2F36]">
+    <p className="text-xs text-[#8E918F] uppercase">{label}</p>
+    {value}
+  </div>
+);
 
 interface Props {
   logs: LogEntry[];
@@ -14,7 +27,7 @@ export const ComplianceModal: React.FC<Props> = ({ logs, duration, onReset }) =>
   const complianceScore = Math.max(0, 100 - (errors * 15));
 
   const handleDownload = () => {
-    const sessionId = Math.random().toString(36).substr(2, 9).toUpperCase();
+    const sessionId = generateId().toUpperCase();
     const date = new Date().toLocaleString();
     
     // Initialize PDF
@@ -128,14 +141,8 @@ export const ComplianceModal: React.FC<Props> = ({ logs, duration, onReset }) =>
         </div>
 
         <div className="grid grid-cols-2 gap-4 mb-8">
-            <div className="bg-[#111318] p-4 rounded-2xl border border-[#2B2F36]">
-                <p className="text-xs text-[#8E918F] uppercase">Duration</p>
-                <p className="text-xl font-mono text-[#E3E3E3]">{duration}</p>
-            </div>
-            <div className="bg-[#111318] p-4 rounded-2xl border border-[#2B2F36]">
-                <p className="text-xs text-[#8E918F] uppercase">Critical Errors</p>
-                <p className={`text-xl font-mono ${errors > 0 ? 'text-[#FFB4AB]' : 'text-[#6DD58C]'}`}>{errors}</p>
-            </div>
+            <StatCard label="Duration" value={<p className="text-xl font-mono text-[#E3E3E3]">{duration}</p>} />
+            <StatCard label="Critical Errors" value={<p className={`text-xl font-mono ${errors > 0 ? 'text-[#FFB4AB]' : 'text-[#6DD58C]'}`}>{errors}</p>} />
             <div className="col-span-2 bg-[#111318] p-4 rounded-2xl border border-[#2B2F36] flex items-center justify-between">
                 <div>
                     <p className="text-xs text-[#8E918F] uppercase">Compliance Score</p>
