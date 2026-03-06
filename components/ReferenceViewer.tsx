@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useCallback, useMemo } from 'react';
 import { Upload, Camera, Link as LinkIcon, X, FileText, Youtube, Trash2, Loader2, AlertCircle } from 'lucide-react';
 import { ReferenceData } from '../types';
 
@@ -9,6 +9,14 @@ interface Props {
   onYoutubeSubmit: (url: string) => void;
   isLoading: boolean;
 }
+
+// --- LOGIC: YouTube Extraction (pure function, defined outside component) ---
+const extractYoutubeId = (url: string): string | null => {
+  if (!url) return null;
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|shorts\/)([^#&?]*).*/;
+  const match = url.trim().match(regExp);
+  return (match && match[2].length === 11) ? match[2] : null;
+};
 
 export const ReferenceViewer: React.FC<Props> = ({ 
   referenceData, 
@@ -21,15 +29,7 @@ export const ReferenceViewer: React.FC<Props> = ({
   const [ytInput, setYtInput] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  // --- LOGIC: YouTube Extraction ---
-  const extractYoutubeId = (url: string): string | null => {
-    if (!url) return null;
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|shorts\/)([^#&?]*).*/;
-    const match = url.trim().match(regExp);
-    return (match && match[2].length === 11) ? match[2] : null;
-  };
-
-  const handleYoutubeSubmit = () => {
+  const handleYoutubeSubmit = useCallback(() => {
     if (!ytInput) return;
     const id = extractYoutubeId(ytInput);
     if (id) {
@@ -39,10 +39,10 @@ export const ReferenceViewer: React.FC<Props> = ({
     } else {
         setError("Invalid YouTube URL");
     }
-  };
+  }, [ytInput, onYoutubeSubmit]);
 
   // --- HELPER: Render Active Content ---
-  const renderLeftPanelContent = () => {
+  const leftPanelContent = useMemo(() => {
     switch (referenceData?.type) {
         case 'PDF':
             return (
@@ -76,7 +76,7 @@ export const ReferenceViewer: React.FC<Props> = ({
         default:
             return null; // Should not happen in this view mode
     }
-  };
+  }, [referenceData?.type, referenceData?.content]);
 
   // --- MODE: IDLE (INPUT FORM) ---
   if (!referenceData) {
@@ -177,7 +177,7 @@ export const ReferenceViewer: React.FC<Props> = ({
         </div>
 
         <div className="flex-1 bg-black/50 relative overflow-hidden flex items-center justify-center">
-            {renderLeftPanelContent()}
+            {leftPanelContent}
         </div>
     </div>
   );

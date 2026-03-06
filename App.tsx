@@ -84,23 +84,23 @@ const App: React.FC = () => {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // --- TOAST SYSTEM ---
-  const showToast = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+  const showToast = useCallback((message: string, type: 'info' | 'success' | 'error' = 'info') => {
     const id = Math.random().toString(36).substr(2, 9);
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
         setToasts(prev => prev.filter(t => t.id !== id));
     }, 4000);
-  };
+  }, []);
 
   // --- LOGGING HELPER ---
-  const addLog = (message: string, type: LogEntry['type'] = 'INFO') => {
+  const addLog = useCallback((message: string, type: LogEntry['type'] = 'INFO') => {
       setLogs(prev => [...prev, {
           id: Math.random().toString(36).substr(2, 9),
           timestamp: new Date().toLocaleTimeString([], { hour12: false }),
           type,
           message
       }]);
-  };
+  }, []);
 
   // --- LIFECYCLE ---
   
@@ -127,7 +127,7 @@ const App: React.FC = () => {
         setIsVoiceActive(true);
         showToast("System Armed: Monitoring Active", 'success');
     }
-  }, [appState]);
+  }, [appState, addLog, showToast]);
 
   // Voice Command Listener
   useEffect(() => {
@@ -162,7 +162,7 @@ const App: React.FC = () => {
         recognitionRef.current?.stop();
     }
     return () => recognitionRef.current?.stop();
-  }, [appState, isVoiceActive]);
+  }, [appState, isVoiceActive, addLog, showToast]);
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -184,12 +184,12 @@ const App: React.FC = () => {
 
   // --- HANDLERS ---
 
-  const handleTutorialComplete = () => {
+  const handleTutorialComplete = useCallback(() => {
       setShowTutorial(false);
       localStorage.setItem('entropy_tutorial_v2', 'true');
-  };
+  }, []);
 
-  const handleFileUpload = (file: File) => {
+  const handleFileUpload = useCallback((file: File) => {
     // Generate Blob URL - Safe for Chrome/modern browsers
     const objectUrl = URL.createObjectURL(file);
     
@@ -205,9 +205,9 @@ const App: React.FC = () => {
     
     addLog(`Ingested Reference: ${file.name}`, 'SUCCESS');
     showToast(`${isPdf ? 'Manual' : 'Schematic'} Uploaded Successfully`, 'success');
-  };
+  }, [addLog, showToast]);
 
-  const handleYoutubeSubmit = async (embedUrl: string) => {
+  const handleYoutubeSubmit = useCallback(async (embedUrl: string) => {
       if (!embedUrl) return;
       
       setYoutubeLoading(true);
@@ -237,15 +237,15 @@ const App: React.FC = () => {
       } finally {
          setYoutubeLoading(false);
       }
-  };
+  }, [addLog, showToast]);
 
-  const startCheckSequence = () => {
+  const startCheckSequence = useCallback(() => {
       if (!referenceData) {
         showToast("Mission Critical: Upload Reference Material First", 'error');
         return;
       }
       setAppState(AppState.CALIBRATION);
-  };
+  }, [referenceData, showToast]);
 
   const captureFrame = useCallback(async () => {
     // Stop check if camera is off
@@ -265,7 +265,7 @@ const App: React.FC = () => {
     } catch(e) {
         // Silent fail on frame capture errors
     }
-  }, [apiKey, referenceData, isPaused, isCameraActive]);
+  }, [apiKey, referenceData, isPaused, isCameraActive, addLog, showToast]);
 
   useEffect(() => {
     if (appState === AppState.MONITORING) {
