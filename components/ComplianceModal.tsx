@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { ShieldCheck, Download, RefreshCw, AlertTriangle, FileText } from 'lucide-react';
 import { LogEntry } from '../types';
 import { jsPDF } from "jspdf";
@@ -10,10 +10,10 @@ interface Props {
 }
 
 export const ComplianceModal: React.FC<Props> = ({ logs, duration, onReset }) => {
-  const errors = logs.filter(l => l.type === 'ERROR').length;
-  const complianceScore = Math.max(0, 100 - (errors * 15));
+  const errors = useMemo(() => logs.filter(l => l.type === 'ERROR').length, [logs]);
+  const complianceScore = useMemo(() => Math.max(0, 100 - (errors * 15)), [errors]);
 
-  const handleDownload = () => {
+  const handleDownload = useCallback(() => {
     const sessionId = Math.random().toString(36).substr(2, 9).toUpperCase();
     const date = new Date().toLocaleString();
     
@@ -110,7 +110,7 @@ export const ComplianceModal: React.FC<Props> = ({ logs, duration, onReset }) =>
     doc.text("Generated automatically by EntropyGuard AI. This document serves as a digital record of procedural adherence.", 105, 280, { align: "center" });
 
     doc.save(`Compliance_Cert_${sessionId}.pdf`);
-  };
+  }, [logs, duration, complianceScore]);
   
   return (
     <div className="fixed inset-0 z-50 bg-[#111318]/90 backdrop-blur-md flex flex-col items-center justify-center p-6 animate-in zoom-in-95">

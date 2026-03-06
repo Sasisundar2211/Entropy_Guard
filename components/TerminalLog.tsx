@@ -7,52 +7,47 @@ interface Props {
   logs: LogEntry[];
 }
 
+const LOG_STYLES: Record<string, { icon: React.ReactElement; color: string; bg: string; border: string }> = {
+    ERROR: {
+        icon: <ShieldAlert size={14} />,
+        color: 'text-[#FF897D]',
+        bg: 'bg-[#3b0d0d]/40',
+        border: 'border-[#FF897D]'
+    },
+    WARNING: {
+        icon: <AlertTriangle size={14} />,
+        color: 'text-[#FDD835]',
+        bg: 'bg-[#2a2208]/40',
+        border: 'border-[#FDD835]'
+    },
+    SUCCESS: {
+        icon: <CheckCircle2 size={14} />,
+        color: 'text-[#6DD58C]',
+        bg: 'bg-[#0d2b15]/40',
+        border: 'border-[#6DD58C]'
+    },
+    AI: {
+        icon: <Cpu size={14} />,
+        color: 'text-[#A8C7FA]',
+        bg: 'bg-[#0e1b33]/40',
+        border: 'border-[#A8C7FA]'
+    },
+    INFO: {
+        icon: <Info size={14} />,
+        color: 'text-[#C4C7C5]',
+        bg: 'hover:bg-[#1E2229]',
+        border: 'border-transparent'
+    }
+};
+
+const getStyle = (type: string) => LOG_STYLES[type] ?? LOG_STYLES.INFO;
+
 export const TerminalLog: React.FC<Props> = ({ logs }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
-
-  const getStyle = (type: string) => {
-    switch (type) {
-        case 'ERROR': 
-            return { 
-                icon: <ShieldAlert size={14} />, 
-                color: 'text-[#FF897D]', 
-                bg: 'bg-[#3b0d0d]/40',
-                border: 'border-[#FF897D]'
-            };
-        case 'WARNING': 
-            return { 
-                icon: <AlertTriangle size={14} />, 
-                color: 'text-[#FDD835]', 
-                bg: 'bg-[#2a2208]/40',
-                border: 'border-[#FDD835]'
-            };
-        case 'SUCCESS': 
-            return { 
-                icon: <CheckCircle2 size={14} />, 
-                color: 'text-[#6DD58C]', 
-                bg: 'bg-[#0d2b15]/40',
-                border: 'border-[#6DD58C]'
-            };
-        case 'AI': 
-            return { 
-                icon: <Cpu size={14} />, 
-                color: 'text-[#A8C7FA]', 
-                bg: 'bg-[#0e1b33]/40',
-                border: 'border-[#A8C7FA]'
-            };
-        default: 
-            return { 
-                icon: <Info size={14} />, 
-                color: 'text-[#C4C7C5]', 
-                bg: 'hover:bg-[#1E2229]',
-                border: 'border-transparent'
-            };
-    }
-  };
 
   return (
     <div className="h-48 bg-[#0B0D10] border-t border-[#2B2F36] flex flex-col font-mono text-sm shadow-[inset_0_2px_4px_rgba(0,0,0,0.4)]">
