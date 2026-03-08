@@ -1,7 +1,7 @@
 """EntropyGuard Backend — FastAPI server for AI analysis and YouTube ingestion."""
 
 import base64
-import os
+import json
 import re
 from typing import Optional
 
@@ -87,7 +87,7 @@ async def ingest_youtube(request: IngestYoutubeRequest):
             detail=f"Could not retrieve transcript: {exc}",
         )
 
-    steps: list[dict] = []
+    steps: list[TaskStep] = []
     for idx, entry in enumerate(transcript_list):
         minutes = int(entry["start"] // 60)
         seconds = int(entry["start"] % 60)
@@ -95,12 +95,12 @@ async def ingest_youtube(request: IngestYoutubeRequest):
         text = entry["text"].strip()
         if text:
             steps.append(
-                {
-                    "id": str(idx + 1),
-                    "timecode": timecode,
-                    "instruction": text,
-                    "completed": False,
-                }
+                TaskStep(
+                    id=str(idx + 1),
+                    timecode=timecode,
+                    instruction=text,
+                    completed=False,
+                )
             )
 
     return {"steps": steps}
@@ -140,7 +140,6 @@ async def analyze_frame(request: AnalyzeRequest):
         text = response.text.strip()
 
         # Try to parse JSON from the response
-        import json
 
         # Strip markdown code fences if present
         if text.startswith("```"):
