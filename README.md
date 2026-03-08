@@ -57,6 +57,7 @@ Whether you're in a manufacturing floor, a lab, or any procedure-driven environm
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) v18 or higher
+- [Python](https://www.python.org/) 3.10 or higher (for the backend)
 - A [Google Gemini API Key](https://ai.google.dev/)
 
 ### Installation
@@ -67,24 +68,43 @@ Whether you're in a manufacturing floor, a lab, or any procedure-driven environm
    cd Entropy_Guard
    ```
 
-2. **Install dependencies**
+2. **Install frontend dependencies**
    ```bash
    npm install
    ```
 
 3. **Configure your API key**
 
-   Create a `.env.local` file in the project root:
+   Copy the example environment file and fill in your key:
+   ```bash
+   cp .env.example .env.local
+   ```
+   Then edit `.env.local` and add your Gemini API key:
    ```env
    GEMINI_API_KEY=your_gemini_api_key_here
    ```
 
-4. **Start the development server**
+4. **Set up the backend**
+   ```bash
+   cd backend
+   python -m venv venv
+   source venv/bin/activate   # On Windows: venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+
+5. **Start the backend server** (in one terminal)
+   ```bash
+   cd backend
+   source venv/bin/activate
+   uvicorn main:app --host 0.0.0.0 --port 8000
+   ```
+
+6. **Start the frontend development server** (in another terminal)
    ```bash
    npm run dev
    ```
 
-5. Open your browser and navigate to `http://localhost:5173`
+7. Open your browser and navigate to `http://localhost:3000`
 
 ### Build for Production
 
@@ -166,9 +186,14 @@ Entropy_Guard/
 │   ├── SettingsModal.tsx       # API key & app settings
 │   ├── ComplianceModal.tsx     # Compliance result display
 │   ├── ReferenceViewer.tsx     # Reference material viewer
-│   └── TerminalLog.tsx         # Real-time event log
+│   ├── TerminalLog.tsx         # Real-time event log
+│   └── ErrorBoundary.tsx       # React error boundary
 ├── services/
 │   └── geminiService.ts        # Google Gemini AI integration
+├── backend/
+│   ├── main.py                 # FastAPI server (analysis & YouTube ingestion)
+│   └── requirements.txt        # Python dependencies
+├── .env.example          # Environment variable template
 ├── index.html
 ├── vite.config.ts
 └── tsconfig.json
