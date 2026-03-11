@@ -1,6 +1,7 @@
 import React from 'react';
 import { ShieldCheck, Download, RefreshCw, AlertTriangle, FileText } from 'lucide-react';
 import { LogEntry } from '../types';
+import { generateId } from '../utils';
 import { jsPDF } from "jspdf";
 
 interface Props {
@@ -14,7 +15,7 @@ export const ComplianceModal: React.FC<Props> = ({ logs, duration, onReset }) =>
   const complianceScore = Math.max(0, 100 - (errors * 15));
 
   const handleDownload = () => {
-    const sessionId = Math.random().toString(36).substr(2, 9).toUpperCase();
+    const sessionId = generateId().toUpperCase();
     const date = new Date().toLocaleString();
     
     // Initialize PDF
