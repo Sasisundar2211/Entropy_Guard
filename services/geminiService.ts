@@ -3,17 +3,19 @@ import { EntropyAnalysisResult, ComplianceStatus, DriftSeverity, ReferenceData, 
 
 const API_URL = "http://localhost:8000/api";
 
+const postJson = async <T>(endpoint: string, body: unknown): Promise<T> => {
+    const response = await fetch(`${API_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(`Request to ${endpoint} failed`);
+    return response.json() as Promise<T>;
+};
+
 export const generateStepsFromUrl = async (url: string): Promise<TaskStep[]> => {
     try {
-        const response = await fetch(`${API_URL}/ingest-youtube`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url })
-        });
-        
-        if (!response.ok) throw new Error("Backend ingestion failed");
-        
-        const data = await response.json();
+        const data = await postJson<{ steps?: TaskStep[] }>('/ingest-youtube', { url });
         
         // Map backend response to Frontend TaskStep type
         return data.steps || [];
@@ -39,19 +41,11 @@ export const performEntropyCheck = async (
 ): Promise<EntropyAnalysisResult> => {
   
   try {
-    const response = await fetch(`${API_URL}/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            apiKey,
-            reference,
-            liveFrame: liveFrameBase64
-        })
+    const data = await postJson<EntropyAnalysisResult>('/analyze', {
+        apiKey,
+        reference,
+        liveFrame: liveFrameBase64
     });
-
-    if (!response.ok) throw new Error("Analysis failed");
-
-    const data = await response.json();
 
     return {
         ...data,
